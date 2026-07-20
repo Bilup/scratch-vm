@@ -897,6 +897,58 @@ const getSimplifiedLayerOrdering = function (targets) {
     return MathUtil.reducedSortOrdering(layerOrders);
 };
 
+const generateBilupUUID = function () {
+    const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+    /**
+     * BigInt -> Base62
+     * @param {bigint} num - The number to convert
+     * @returns {string} The base62 string
+     */
+    const toBase62 = function (num) {
+        let out = '';
+
+        while (num > 0n) {
+            out = chars[Number(num % 62n)] + out;
+            num = num / 62n;
+        }
+
+        return out || '0';
+    };
+
+    /**
+     * Secure random string
+     * @param {number} length - The length of the random string
+     * @returns {string} The random base62 string
+     */
+    const randomBase62 = function (length = 14) {
+        const bytes = new Uint8Array(length * 2);
+
+        crypto.getRandomValues(bytes);
+
+        let result = '';
+
+        for (let i = 0; i < bytes.length; i++) {
+            result += chars[bytes[i] % 62];
+
+            if (result.length >= length) {
+                break;
+            }
+        }
+
+        return result;
+    };
+
+    // Timestamp
+    const time = toBase62(BigInt(Date.now()));
+
+    // High entropy random
+    const rand = randomBase62(14);
+
+    // Final UUID
+    return `BILUP-${time}-${rand}`;
+};
+
 const serializeMonitors = function (monitors, runtime, extensions) {
     // Monitors position is always stored as position from top-left corner in 480x360 stage.
     const xOffset = (runtime.stageWidth - 480) / 2;

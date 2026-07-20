@@ -577,6 +577,8 @@ class Runtime extends EventEmitter {
          * Total number of finished or errored scratch-storage load() requests since the runtime was created or cleared.
          */
         this.finishedAssetRequests = 0;
+
+        this.signature = null;
     }
 
     /**
