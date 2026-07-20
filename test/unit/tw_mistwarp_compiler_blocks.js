@@ -131,8 +131,9 @@ test('compiled list helpers preserve case-sensitive mode', t => {
     t.end();
 });
 
-test("legacy Mist's Utils patch blocks splice raw JavaScript", async t => {
+test('legacy Mist\'s Utils patch blocks splice raw JavaScript', async t => {
     const vm = new VirtualMachine();
+    vm.securityManager.canLoadExtensionFromProject = () => Promise.resolve(true);
     await vm.loadProject({
         targets: [{
             isStage: true,
@@ -226,6 +227,7 @@ test("legacy Mist's Utils patch blocks splice raw JavaScript", async t => {
 
 test("Mist's Utils compiler API cannot alter raw patch syntax", async t => {
     const vm = new VirtualMachine();
+    vm.securityManager.canLoadExtensionFromProject = () => Promise.resolve(true);
     vm.extensionManager.addBuiltinExtension('mistsutils', class {
         getInfo () {
             return {
@@ -391,6 +393,7 @@ test("Mist's Utils 5.9 blocks use native compiler cases", async t => {
 
 test('native switch keeps raw patch values uncoerced', async t => {
     const vm = new VirtualMachine();
+    vm.securityManager.canLoadExtensionFromProject = () => Promise.resolve(true);
     await vm.loadProject({
         targets: [{
             isStage: true,
@@ -517,6 +520,7 @@ test('native switch keeps raw patch values uncoerced', async t => {
 
 test('casting a raw patch reporter keeps its operator precedence', async t => {
     const vm = new VirtualMachine();
+    vm.securityManager.canLoadExtensionFromProject = () => Promise.resolve(true);
     vm.extensionManager.addBuiltinExtension('mistsutils', class {
         getInfo () {
             return {

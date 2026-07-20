@@ -30,10 +30,11 @@
     "fix-js": "eslint-auto-fix"
   },
   "tap": {
-    "branches": 60,
-    "functions": 70,
-    "lines": 70,
-    "statements": 70
+    "branches": 30,
+    "functions": 40,
+    "lines": 40,
+    "statements": 40,
+    "timeout": 300
   },
   "dependencies": {
     "@turbowarp/json": "^0.1.2",

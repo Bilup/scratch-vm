@@ -6,6 +6,21 @@ const {parseVectorMetadata} = require('../serialization/tw-costume-import-export
 
 const loadVector_ = function (costume, runtime, rotationCenter, optVersion) {
     return new Promise(resolve => {
+        if (!runtime.renderer) {
+            log.warn('No rendering module present; cannot load costume');
+            costume.skinId = -1;
+            costume.size = [0, 0];
+            if (!rotationCenter) {
+                costume.rotationCenterX = 0;
+                costume.rotationCenterY = 0;
+                costume.bitmapResolution = 1;
+            }
+            if (runtime.isPackaged) {
+                costume.asset = null;
+            }
+            return resolve(costume);
+        }
+
         let svgString = costume.asset.decodeText();
 
         // TW: We allow SVGs to specify their rotation center using a special comment.
@@ -272,6 +287,18 @@ const toDataURL = imageOrCanvas => {
 };
 
 const loadBitmap_ = function (costume, runtime, _rotationCenter) {
+    if (!runtime.renderer) {
+        log.warn('No rendering module present; cannot load costume');
+        costume.skinId = -1;
+        costume.size = [0, 0];
+        if (!_rotationCenter) {
+            costume.rotationCenterX = 0;
+            costume.rotationCenterY = 0;
+            costume.bitmapResolution = 1;
+        }
+        return Promise.resolve(costume);
+    }
+
     return fetchBitmapCanvas_(costume, runtime, _rotationCenter)
         .then(fetched => {
             const updateCostumeAsset = function (dataURI) {

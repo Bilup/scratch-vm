@@ -1,4 +1,5 @@
-## TurboWarp/scratch-vm
+Tips:[Beta]
+## Bilup/scratch-vm
 
 Modified Scratch VM with a JIT compiler and more features.
 
@@ -6,7 +7,7 @@ This is a drop-in replacement for LLK/scratch-vm.
 
 ## Setup
 
-See https://github.com/TurboWarp/scratch-gui/wiki/Getting-Started to setup the complete TurboWarp environment.
+See https://docs.bilup.org/development/getting-started to setup the complete Bilup environment.
 
 If you just want to play with the VM then it's the same process as upstream scratch-vm.
 
@@ -16,7 +17,7 @@ If you only use the standard reporter, boolean, and command block types, everyth
 
 ## Compiler Overview
 
-For a high-level overview of how the compiler works, see https://docs.turbowarp.org/how
+For a high-level overview of how the compiler works, see https://docs.bilup.org/how
 
 For more technical information, read the code in src/compiler.
 
