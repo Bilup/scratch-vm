@@ -10,7 +10,7 @@ const Profiler = require('./profiler');
 const Sequencer = require('./sequencer');
 const execute = require('./execute.js');
 const compilerExecute = require('../compiler/jsexecute');
-const {mistsUtils: mistsUtilsCompiler, core: mistWarpCompiler} = require('../compiler/mists-utils');
+const {mistsUtils: mistsUtilsCompiler, core: bilupCompiler} = require('../compiler/mists-utils');
 const ScratchBlocksConstants = require('./scratch-blocks-constants');
 const TargetType = require('../extension-support/target-type');
 const Thread = require('./thread');
@@ -494,7 +494,7 @@ class Runtime extends EventEmitter {
         for (const [opcode, compiler] of Object.entries(mistsUtilsCompiler)) {
             this.compilerExtensions.set(`mistsutils_${opcode}`, compiler);
         }
-        for (const [opcode, compiler] of Object.entries(mistWarpCompiler)) {
+        for (const [opcode, compiler] of Object.entries(bilupCompiler)) {
             this.compilerExtensions.set(opcode, compiler);
         }
 
@@ -3086,8 +3086,8 @@ class Runtime extends EventEmitter {
         const options = this.generateDifferingProjectOptions();
 
         if (extraOptions && typeof extraOptions === 'object') {
-            if (Object.prototype.hasOwnProperty.call(extraOptions, 'mistwarpTheme')) {
-                options.mistwarpTheme = extraOptions.mistwarpTheme;
+            if (Object.prototype.hasOwnProperty.call(extraOptions, 'bilupTheme')) {
+                options.bilupTheme = extraOptions.bilupTheme;
             }
         }
         // TODO: translate

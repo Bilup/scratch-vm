@@ -224,7 +224,7 @@ class ScriptTreeGenerator {
     }
 
     /**
-     * Compile MistWarp's extendable operators as nested native operations.
+     * Compile Bilup's extendable operators as nested native operations.
      * @param {*} block Operator block.
      * @param {string} prefix Input name prefix.
      * @param {string} opcode IR opcode.

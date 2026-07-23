@@ -117,7 +117,7 @@ class Scratch3ProcedureBlocks {
     argumentReporterBoolean (args, util) {
         const value = util.getParam(args.VALUE);
         if (value === null) {
-            // tw: implement is compiled? and is mistwarp?
+            // tw: implement is compiled? and is bilup?
             const normalizeValue = input => {
                 const lowered = String(input)
                     .toLowerCase()
@@ -130,7 +130,7 @@ class Scratch3ProcedureBlocks {
             if (util.target.runtime.compilerOptions.enabled && normalizedValue === 'is compiled') {
                 return true;
             }
-            if (normalizedValue === 'is mistwarp') {
+            if (normalizedValue === 'is bilup') {
                 return true;
             }
             // When the parameter is not found in the most recent procedure

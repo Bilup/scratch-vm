@@ -505,16 +505,16 @@ test('pi and newline round trip through stage variables', t => {
 
         const saved = sb3.serialize(runtime);
         const stage = saved.targets.find(target => target.isStage);
-        t.same(stage.variables['mistwarp.pi'], ['mistwarp.pi', Math.PI], 'pi saved as a stage variable');
-        t.same(stage.variables['mistwarp.newline'], ['mistwarp.newline', '\n'], 'newline saved as a stage variable');
+        t.same(stage.variables['bilup.pi'], ['bilup.pi', Math.PI], 'pi saved as a stage variable');
+        t.same(stage.variables['bilup.newline'], ['bilup.newline', '\n'], 'newline saved as a stage variable');
 
         const savedBlocks = saved.targets[1].blocks;
         const opcodes = Object.values(savedBlocks).map(block => block.opcode);
         t.notOk(opcodes.includes('operator_pi'), 'no operator_pi block saved');
         t.notOk(opcodes.includes('operator_newline'), 'no operator_newline block saved');
         const join = Object.values(savedBlocks).find(block => block.opcode === 'operator_join');
-        t.same(join.inputs.STRING1[1], [12, 'mistwarp.pi', 'mistwarp.pi'], 'pi is a variable reporter');
-        t.same(join.inputs.STRING2[1], [12, 'mistwarp.newline', 'mistwarp.newline'], 'newline is a variable reporter');
+        t.same(join.inputs.STRING1[1], [12, 'bilup.pi', 'bilup.pi'], 'pi is a variable reporter');
+        t.same(join.inputs.STRING2[1], [12, 'bilup.newline', 'bilup.newline'], 'newline is a variable reporter');
 
         for (const target of targets) runtime.disposeTarget(target);
 

@@ -99,7 +99,7 @@ test('Stored turbo mode emits event on VM', async t => {
     t.end();
 });
 
-test('Can store and load mistwarpTheme', async t => {
+test('Can store and load bilupTheme', async t => {
     const project = readFileToBuffer(path.resolve(__dirname, '../fixtures/tw-stored-settings/no-comment.sb3'));
     const vm = makeVM();
     await vm.loadProject(project);
@@ -115,13 +115,13 @@ test('Can store and load mistwarpTheme', async t => {
     };
 
     vm.storeProjectOptions({
-        mistwarpTheme: themePayload
+        bilupTheme: themePayload
     });
 
     const newVM = makeVM();
     await newVM.loadProject(vm.toJSON());
     const stored = newVM.runtime.getStoredProjectOptions();
     t.ok(stored, 'stored options exist');
-    t.same(stored.mistwarpTheme, themePayload, 'mistwarpTheme payload round-trips');
+    t.same(stored.bilupTheme, themePayload, 'bilupTheme payload round-trips');
     t.end();
 });

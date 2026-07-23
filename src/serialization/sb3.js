@@ -113,11 +113,11 @@ const EXTENDABLE_OPERATORS = {
 };
 
 // Blocks that vanilla Scratch has no opcode for, but which are constant enough to be saved as a
-// stage variable holding the value. Vanilla runs them as an ordinary variable reporter; MistWarp
+// stage variable holding the value. Vanilla runs them as an ordinary variable reporter; Bilup
 // turns them back into blocks on load. The id is the name so the same variable is reused forever.
 const VANILLA_CONSTANTS = {
-    operator_pi: {name: 'mistwarp.pi', value: Math.PI},
-    operator_newline: {name: 'mistwarp.newline', value: '\n'}
+    operator_pi: {name: 'bilup.pi', value: Math.PI},
+    operator_newline: {name: 'bilup.newline', value: '\n'}
 };
 
 const CONSTANT_OPCODE_BY_NAME = {};

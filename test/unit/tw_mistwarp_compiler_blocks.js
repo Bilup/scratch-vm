@@ -3,7 +3,7 @@ const VirtualMachine = require('../../src/virtual-machine');
 const JSGenerator = require('../../src/compiler/jsgen');
 const {runtimeFunctions} = require('../../src/compiler/jsexecute');
 
-test('MistWarp text and coordinate blocks compile directly', async t => {
+test('Bilup text and coordinate blocks compile directly', async t => {
     const vm = new VirtualMachine();
     await vm.loadProject({
         targets: [{
