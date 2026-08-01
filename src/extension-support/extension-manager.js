@@ -26,6 +26,14 @@ const defaultBuiltinExtensions = {
     boost: () => require('../extensions/scratch3_boost'),
     gdxfor: () => require('../extensions/scratch3_gdx_for'),
     patching: () => require('../extensions/bilup_patching'),
+    rotur: () => require('../extensions/rotur').RoturAccount,
+    roturEconomy: () => require('../extensions/rotur').RoturEconomy,
+    roturKeys: () => require('../extensions/rotur').RoturKeys,
+    roturStatus: () => require('../extensions/rotur').RoturStatus,
+    roturSocial: () => require('../extensions/rotur').RoturSocial,
+    roturShop: () => require('../extensions/rotur').RoturShop,
+    roturGroups: () => require('../extensions/rotur').RoturGroups,
+    roturFiles: () => require('../extensions/rotur').RoturFiles,
     // tw: core extension
     tw: () => require('../extensions/tw')
 };
@@ -225,15 +233,6 @@ class ExtensionManager {
      * @param {string} extensionURL - the URL for the extension to load OR the ID of an internal extension
      * @returns {Promise} resolved once the extension is loaded and initialized or rejected on failure
      */
-    _isLocalExtensionURL (extensionURL) {
-        try {
-            const parsedURL = new URL(extensionURL);
-            return parsedURL.protocol === 'data:' || parsedURL.protocol === 'file:';
-        } catch (e) {
-            return false;
-        }
-    }
-
     async loadExtensionURL (extensionURL) {
         if (this.isBuiltinExtension(extensionURL)) {
             this.loadExtensionIdSync(extensionURL);
@@ -253,14 +252,12 @@ class ExtensionManager {
 
         this.loadingAsyncExtensions++;
 
-        // data: and file: URLs are local (inline text or local file) — no sandbox, no security checks
-        const isLocal = this._isLocalExtensionURL(extensionURL);
-        const sandboxMode = isLocal ? 'unsandboxed' : await this.securityManager.getSandboxMode(extensionURL);
-        const rewritten = isLocal ? extensionURL : await this.securityManager.rewriteExtensionURL(extensionURL);
+        const sandboxMode = await this.securityManager.getSandboxMode(extensionURL);
+        const rewritten = await this.securityManager.rewriteExtensionURL(extensionURL);
 
         if (sandboxMode === 'unsandboxed') {
             const {load} = require('./tw-unsandboxed-extension-runner');
-            const extensionObjects = await load(rewritten, this.vm, {bypassSecurity: isLocal})
+            const extensionObjects = await load(rewritten, this.vm)
                 .catch(error => this._failedLoadingExtensionScript(error));
             const fakeWorkerId = this.nextExtensionWorker++;
             this.workerURLs[fakeWorkerId] = extensionURL;
