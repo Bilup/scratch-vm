@@ -1,5 +1,4 @@
 const dispatch = require('../dispatch/central-dispatch');
-const BilupBlocks = require('../extensions/tw');
 const log = require('../util/log');
 const maybeFormatMessage = require('../util/maybe-format-message');
 
