@@ -29,7 +29,14 @@ jobs:
         # We expect to see syntax errors from the old jsdoc cli not understanding some of our syntax
         # It will still generate what it can, so it's safe to ignore the error
         continue-on-error: true
-      - name: Upload artifact
+      - name: Upload dist
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/develop')
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          if-no-files-found: error
+      - name: Upload pages artifact
         if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/develop')
         uses: actions/upload-pages-artifact@v3
         with:
@@ -44,13 +51,57 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     permissions:
+      contents: write
       pages: write
       id-token: write
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: Download artifact
+      - name: Checkout (with push access)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Download dist
         uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Deploy to develop-builds branch (npm package)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Backup dist
+          rm -rf /tmp/dist
+          cp -r dist /tmp/dist
+
+          # Fetch all branches
+          git fetch origin
+
+          # Checkout or create develop-builds based on develop
+          if git show-ref --verify --quiet refs/remotes/origin/develop-builds; then
+            git checkout develop-builds
+          else
+            git checkout -b develop-builds origin/develop
+          fi
+
+          # Make develop-builds exactly mirror develop (removes old playground layout)
+          git reset --hard origin/develop
+
+          # Replace dist with built artifacts
+          rm -rf dist
+          mkdir dist
+          cp -r /tmp/dist/* dist/
+
+          # Force add dist (ignore .gitignore)
+          git add -f dist
+
+          # Commit if changed
+          git commit -m "chore: update dist from develop" || echo "No changes"
+
+          # Push
+          git push --force origin develop-builds
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

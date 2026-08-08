@@ -26,10 +26,10 @@ class BilupBlocks {
         return {
             id: 'tw',
             name: 'Bilup',
-            color1: '#ff4c4c',
-            color2: '#e64444',
-            color3: '#c73a3a',
-            docsURI: 'https://docs.bilup.org/blocks',
+            color1: '#75c1c4',
+            color2: '#52a1a5',
+            color3: '#3ea5a8',
+            docsURI: 'https://docs.bilup.org/extensions/mistwarp-blocks',
             menuIconURI: iconURI,
             blockIconURI: iconURI,
             blocks: [
