@@ -54,7 +54,7 @@ const makeRuntime = (opcodes, projectName = 'test') => ({
 });
 
 test('logs in once with only the scopes the project uses', async t => {
-    const runtime = makeRuntime(['roturEconomy_balance']);
+    const runtime = makeRuntime(['bilupEconomy_balance']);
     const economy = new RoturEconomy(runtime);
 
     t.equal(await economy.balance({}), 42);
@@ -70,7 +70,7 @@ test('logs in once with only the scopes the project uses', async t => {
 });
 
 test('reuses a stored token with a matching scope set', async t => {
-    const economy = new RoturEconomy(makeRuntime(['roturEconomy_balance']));
+    const economy = new RoturEconomy(makeRuntime(['bilupEconomy_balance']));
 
     t.equal(await economy.balance({}), 42);
     t.same(logins, [['credits:view']]);
@@ -79,7 +79,7 @@ test('reuses a stored token with a matching scope set', async t => {
 
 test('logs in again when the stored token no longer validates', async t => {
     authValid = false;
-    const economy = new RoturEconomy(makeRuntime(['roturEconomy_balance']));
+    const economy = new RoturEconomy(makeRuntime(['bilupEconomy_balance']));
 
     t.equal(await economy.balance({}), 42);
     t.same(logins, [['credits:view'], ['credits:view']]);
@@ -93,7 +93,7 @@ test('logs in again when the stored token no longer validates', async t => {
 });
 
 test('does not hand another project on the same origin the stored token', async t => {
-    const economy = new RoturEconomy(makeRuntime(['roturEconomy_balance'], 'other'));
+    const economy = new RoturEconomy(makeRuntime(['bilupEconomy_balance'], 'other'));
     const before = logins.length;
 
     t.equal(await economy.balance({}), 42);
@@ -103,7 +103,7 @@ test('does not hand another project on the same origin the stored token', async 
 });
 
 test('the request block widens the token to cover the extra scope', async t => {
-    const runtime = makeRuntime(['roturEconomy_balance', 'rotur_request']);
+    const runtime = makeRuntime(['bilupEconomy_balance', 'bilupAccounts_request']);
     const account = new RoturAccount(runtime);
     const economy = new RoturEconomy(runtime);
 

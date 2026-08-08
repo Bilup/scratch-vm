@@ -1,4 +1,5 @@
 const dispatch = require('../dispatch/central-dispatch');
+const BilupBlocks = require('../extensions/tw');
 const log = require('../util/log');
 const maybeFormatMessage = require('../util/maybe-format-message');
 
@@ -26,14 +27,14 @@ const defaultBuiltinExtensions = {
     boost: () => require('../extensions/scratch3_boost'),
     gdxfor: () => require('../extensions/scratch3_gdx_for'),
     patching: () => require('../extensions/bilup_patching'),
-    rotur: () => require('../extensions/rotur').RoturAccount,
-    roturEconomy: () => require('../extensions/rotur').RoturEconomy,
-    roturKeys: () => require('../extensions/rotur').RoturKeys,
-    roturStatus: () => require('../extensions/rotur').RoturStatus,
-    roturSocial: () => require('../extensions/rotur').RoturSocial,
-    roturShop: () => require('../extensions/rotur').RoturShop,
-    roturGroups: () => require('../extensions/rotur').RoturGroups,
-    roturFiles: () => require('../extensions/rotur').RoturFiles,
+    bilupAccounts: () => require('../extensions/rotur').RoturAccount,
+    bilupEconomy: () => require('../extensions/rotur').RoturEconomy,
+    bilupKeys: () => require('../extensions/rotur').RoturKeys,
+    bilupStatus: () => require('../extensions/rotur').RoturStatus,
+    bilupSocial: () => require('../extensions/rotur').RoturSocial,
+    bilupShop: () => require('../extensions/rotur').RoturShop,
+    bilupGroups: () => require('../extensions/rotur').RoturGroups,
+    bilupFiles: () => require('../extensions/rotur').RoturFiles,
     // tw: core extension
     tw: () => require('../extensions/tw')
 };
