@@ -40,6 +40,16 @@ class Blocks {
         this._scripts = [];
 
         /**
+         * A set of the block IDs currently in `_scripts`, so that `_addScript`
+         * can check membership in O(1) instead of scanning the (potentially
+         * very long) scripts array on every insertion.
+         * @type {Set.<String>}
+         * @private
+         */
+        Object.defineProperty(this, '_scriptSet', {writable: true, enumerable: false});
+        this._scriptSet = new Set();
+
+        /**
          * Runtime Cache
          * @type {{inputs: {}, procedureParamNames: {}, procedureDefinitions: {}}}
          * @private
@@ -422,6 +432,7 @@ class Blocks {
         const newBlocks = new Blocks(this.runtime, this.forceNoGlow);
         newBlocks._blocks = Clone.simple(this._blocks);
         newBlocks._scripts = Clone.simple(this._scripts);
+        newBlocks._scriptSet = new Set(this._scriptSet);
         return newBlocks;
     }
     // ---------------------------------------------------------------------
@@ -762,6 +773,42 @@ class Blocks {
         // A new block was actually added to the block container,
         // emit a project changed event
         this.emitProjectChanged();
+    }
+
+    /**
+     * Block management: create many blocks at once. Equivalent to calling
+     * `createBlock` for every block in the list, but only resets the runtime
+     * caches and emits the project changed event once for the whole batch.
+     * This is significantly faster when importing a project with many blocks
+     * (e.g. a large SB3), where the repeated `resetCache` and event emission
+     * of `createBlock` add up to noticeable main-thread time.
+     * @param {!Array.<!object>} blockList List of blocks to create.
+     */
+    createBlocks (blockList) {
+        let addedAny = false;
+        for (let i = 0; i < blockList.length; i++) {
+            const block = blockList[i];
+            if (!block) continue;
+            // Does the block already exist?
+            // Could happen, e.g., for an unobscured shadow.
+            if (Object.prototype.hasOwnProperty.call(this._blocks, block.id)) {
+                continue;
+            }
+            // Create new block.
+            this._blocks[block.id] = block;
+            // Push block id to scripts array.
+            // Blocks are added as a top-level stack if they are marked as a top-block
+            // (if they were top-level XML in the event).
+            if (block.topLevel) {
+                this._addScript(block.id);
+            }
+            addedAny = true;
+        }
+
+        if (addedAny) {
+            this.resetCache();
+            this.emitProjectChanged();
+        }
     }
 
     /**
@@ -1424,8 +1471,10 @@ class Blocks {
             block.topLevel = false;
             return;
         }
-        const i = this._scripts.indexOf(topBlockId);
-        if (i > -1) return; // Already in scripts.
+        // Set membership is O(1), whereas indexOf would scan the whole array.
+        // Importing a project with many scripts used to be quadratic here.
+        if (this._scriptSet.has(topBlockId)) return; // Already in scripts.
+        this._scriptSet.add(topBlockId);
         this._scripts.push(topBlockId);
         // Update `topLevel` property on the top block.
         this._blocks[topBlockId].topLevel = true;
@@ -1436,8 +1485,10 @@ class Blocks {
      * @param {?string} topBlockId ID of block that starts the script.
      */
     _deleteScript (topBlockId) {
-        const i = this._scripts.indexOf(topBlockId);
-        if (i > -1) this._scripts.splice(i, 1);
+        if (this._scriptSet.delete(topBlockId)) {
+            const i = this._scripts.indexOf(topBlockId);
+            if (i > -1) this._scripts.splice(i, 1);
+        }
         // Update `topLevel` property on the top block.
         if (this._blocks[topBlockId]) this._blocks[topBlockId].topLevel = false;
     }

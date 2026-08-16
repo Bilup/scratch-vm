@@ -210,6 +210,7 @@ const parseScripts = function (scripts, blocks, addBroadcastMsg, getVariableId, 
     // Keep track of the index of the current script being
     // parsed in order to attach block comments correctly
     let scriptIndexForComment = 0;
+    const allBlocks = [];
 
     for (let i = 0; i < scripts.length; i++) {
         const script = scripts[i];
@@ -226,7 +227,7 @@ const parseScripts = function (scripts, blocks, addBroadcastMsg, getVariableId, 
             parsedBlockList[0].topLevel = true;
             parsedBlockList[0].parent = null;
         }
-        // Flatten children and create add the blocks.
+        // Flatten children and collect the blocks.
         const convertedBlocks = flatten(parsedBlockList);
         for (let j = 0; j < convertedBlocks.length; j++) {
             const block = convertedBlocks[j];
@@ -234,9 +235,14 @@ const parseScripts = function (scripts, blocks, addBroadcastMsg, getVariableId, 
                 Object.values(block.inputs).every(input => !input.block && !input.shadow)) {
                 block.booleanToggle = true;
             }
-            blocks.createBlock(block);
+            allBlocks.push(block);
         }
     }
+
+    // Create all the blocks for every script in a single batch so that the
+    // blocks container only resets its caches and emits one project changed
+    // event for the whole sprite.
+    blocks.createBlocks(allBlocks);
 };
 
 /**
@@ -400,9 +406,7 @@ const parseMonitorObject = (object, runtime, targets, extensions) => {
     } else {
         // Blocks can be created with children, flatten and add to monitorBlocks.
         const newBlocks = flatten([block]);
-        for (let i = 0; i < newBlocks.length; i++) {
-            runtime.monitorBlocks.createBlock(newBlocks[i]);
-        }
+        runtime.monitorBlocks.createBlocks(newBlocks);
     }
 
     // Convert numbered mode into strings for better understandability.

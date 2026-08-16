@@ -1561,10 +1561,14 @@ const parseScratchObject = function (object, runtime, extensions, zip, assets) {
             collapseOperators(object.blocks);
         }
         // Take a second pass to create objects and add extensions
+        // Collect all blocks first and create them in one batch so that the
+        // blocks container only resets its caches and emits a single project
+        // changed event, instead of doing so once per block.
+        const blockList = [];
         for (const blockId in object.blocks) {
             if (!Object.prototype.hasOwnProperty.call(object.blocks, blockId)) continue;
             const blockJSON = object.blocks[blockId];
-            blocks.createBlock(blockJSON);
+            blockList.push(blockJSON);
 
             // If the block is from an extension, record it.
             const extensionID = getExtensionIdForOpcode(blockJSON.opcode);
@@ -1572,6 +1576,7 @@ const parseScratchObject = function (object, runtime, extensions, zip, assets) {
                 extensions.extensionIDs.add(extensionID);
             }
         }
+        blocks.createBlocks(blockList);
         // Take a third pass to fix various things that spork broke.
         fixSporkCompatibility(object.blocks);
     }
@@ -1731,7 +1736,7 @@ const parseScratchObject = function (object, runtime, extensions, zip, assets) {
     return Promise.all(costumePromises.concat(soundPromises)).then(() => target);
 };
 
-const deserializeMonitor = function (monitorData, runtime, targets, extensions) {
+const deserializeMonitor = function (monitorData, runtime, targets, extensions, pendingBlocks) {
     // Monitors position is always stored as position from top-left corner in 480x360 stage.
     const xOffset = (runtime.stageWidth - 480) / 2;
     const yOffset = (runtime.stageHeight - 360) / 2;
@@ -1835,7 +1840,14 @@ const deserializeMonitor = function (monitorData, runtime, targets, extensions) 
             field.variableType = Variable.LIST_TYPE;
         }
 
-        runtime.monitorBlocks.createBlock(monitorBlock);
+        // Defer creating the block so that all monitor blocks are added in a
+        // single batch at the end of deserialization, avoiding repeated cache
+        // resets and project changed events for projects with many monitors.
+        if (pendingBlocks) {
+            pendingBlocks.push(monitorBlock);
+        } else {
+            runtime.monitorBlocks.createBlock(monitorBlock);
+        }
 
         // If the block is from an extension, record it.
         const extensionID = getExtensionIdForOpcode(monitorBlock.opcode);
@@ -2004,7 +2016,10 @@ const deserialize = async function (json, runtime, zip, isSingleSprite) {
             }))
         .then(targets => replaceUnsafeCharsInVariableIds(targets))
         .then(targets => {
-            monitorObjects.map(monitorDesc => deserializeMonitor(monitorDesc, runtime, targets, extensions));
+            const pendingMonitorBlocks = [];
+            monitorObjects.map(monitorDesc => deserializeMonitor(
+                monitorDesc, runtime, targets, extensions, pendingMonitorBlocks));
+            runtime.monitorBlocks.createBlocks(pendingMonitorBlocks);
             if (Object.prototype.hasOwnProperty.call(json, 'extensionStorage')) {
                 runtime.extensionStorage = json.extensionStorage;
             }

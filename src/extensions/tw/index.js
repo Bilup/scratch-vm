@@ -29,7 +29,7 @@ class BilupBlocks {
             color1: '#75c1c4',
             color2: '#52a1a5',
             color3: '#3ea5a8',
-            docsURI: 'https://docs.bilup.org/extensions/mistwarp-blocks',
+            docsURI: 'https://docs.bilup.org/extensions/bilup-blocks',
             menuIconURI: iconURI,
             blockIconURI: iconURI,
             blocks: [
