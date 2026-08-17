@@ -24,6 +24,10 @@ const oldCompilerCompatiblity = require('./old-compiler-compatibility.js');
 
 const SCALAR_TYPE = '';
 const LIST_TYPE = 'list';
+// Maximum recursion depth when descending into block inputs and substacks.
+// Real Scratch projects rarely nest deeper than a few dozen blocks, so this is
+// generous while still protecting against stack overflow from corrupted data.
+const MAX_IR_DESCEND_DEPTH = 500;
 const COMPILER_INPUT_TYPES = {
     any: InputType.ANY,
     number: InputType.NUMBER,
@@ -109,6 +113,16 @@ class ScriptTreeGenerator {
         this.variableCache = {};
 
         this.usesTimer = false;
+
+        /**
+         * Recursion depth guard for block graph descent. A corrupted or
+         * malicious project could contain a cycle of input or substack blocks
+         * that would otherwise cause unbounded recursion (stack overflow) and
+         * freeze the editor.
+         * @type {number}
+         * @private
+         */
+        this.descendDepth = 0;
 
         this.namesOfCostumesAndSounds = new Set();
         for (const target of this.runtime.targets) {
@@ -206,21 +220,30 @@ class ScriptTreeGenerator {
      * @returns {IntermediateInput} Compiled input node for this input.
      */
     descendInputOfBlock (parentBlock, inputName, preserveStrings = false) {
-        const input = parentBlock.inputs[inputName];
-        if (!input) {
-            log.warn(`IR: ${parentBlock.opcode}: missing input ${inputName}`, parentBlock);
+        if (this.descendDepth >= MAX_IR_DESCEND_DEPTH) {
+            log.error(`IR: block graph recursion too deep at ${parentBlock.opcode}.${inputName}; abandoning descent`);
             return this.createConstantInput(0);
         }
-        const inputId = input.block;
-        const block = this.getBlockById(inputId);
-        if (!block) {
-            log.warn(`IR: ${parentBlock.opcode}: could not find input ${inputName} with ID ${inputId}`);
-            return this.createConstantInput(0);
-        }
+        this.descendDepth++;
+        try {
+            const input = parentBlock.inputs[inputName];
+            if (!input) {
+                log.warn(`IR: ${parentBlock.opcode}: missing input ${inputName}`, parentBlock);
+                return this.createConstantInput(0);
+            }
+            const inputId = input.block;
+            const block = this.getBlockById(inputId);
+            if (!block) {
+                log.warn(`IR: ${parentBlock.opcode}: could not find input ${inputName} with ID ${inputId}`);
+                return this.createConstantInput(0);
+            }
 
-        const intermediate = this.descendInput(block, preserveStrings);
-        this.script.yields = this.script.yields || intermediate.yields;
-        return intermediate;
+            const intermediate = this.descendInput(block, preserveStrings);
+            this.script.yields = this.script.yields || intermediate.yields;
+            return intermediate;
+        } finally {
+            this.descendDepth--;
+        }
     }
 
     /**
@@ -234,7 +257,8 @@ class ScriptTreeGenerator {
      */
     descendVariadicOperator (block, prefix, opcode, resultType, inputType) {
         const parsedCount = Number.parseInt(block.mutation?.itemcount, 10);
-        const count = parsedCount >= 2 ? parsedCount : 2;
+        // Guard against a corrupted or malicious project with a huge itemcount.
+        const count = parsedCount >= 2 ? Math.min(parsedCount, 20) : 2;
         let result = new IntermediateInput(opcode, resultType, {
             left: this.descendInputOfBlock(block, `${prefix}1`).toType(inputType),
             right: this.descendInputOfBlock(block, `${prefix}2`).toType(inputType)
@@ -1167,20 +1191,36 @@ class ScriptTreeGenerator {
      * @returns {IntermediateStack} List of stacked block nodes.
      */
     walkStack (startingBlockId) {
+        if (this.descendDepth >= MAX_IR_DESCEND_DEPTH) {
+            log.error('IR: block stack recursion too deep; abandoning descent');
+            return new IntermediateStack();
+        }
+        this.descendDepth++;
         const result = new IntermediateStack();
         let blockId = startingBlockId;
+        // Guard against a cycle in the `next` chain, which would otherwise loop forever.
+        const visited = new Set();
 
-        while (blockId !== null) {
-            const block = this.getBlockById(blockId);
-            if (!block) {
-                break;
+        try {
+            while (blockId !== null) {
+                if (visited.has(blockId)) {
+                    log.error(`IR: circular block chain detected at ${blockId}; stopping`);
+                    break;
+                }
+                visited.add(blockId);
+                const block = this.getBlockById(blockId);
+                if (!block) {
+                    break;
+                }
+
+                const node = this.descendStackedBlock(block);
+                this.script.yields = this.script.yields || node.yields;
+                result.blocks.push(node);
+
+                blockId = block.next;
             }
-
-            const node = this.descendStackedBlock(block);
-            this.script.yields = this.script.yields || node.yields;
-            result.blocks.push(node);
-
-            blockId = block.next;
+        } finally {
+            this.descendDepth--;
         }
 
         return result;

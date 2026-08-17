@@ -281,7 +281,15 @@ class Blocks {
     getTopLevelScript (id) {
         let block = this._blocks[id];
         if (typeof block === 'undefined') return null;
+        // Guard against a cycle in the `parent` chain, which would otherwise
+        // loop forever and freeze the editor.
+        const visited = new Set();
         while (block.parent !== null) {
+            if (visited.has(block.parent)) {
+                log.error(`Circular block parent chain detected at ${block.parent}`);
+                return block.id;
+            }
+            visited.add(block.parent);
             block = this._blocks[block.parent];
         }
         return block.id;
@@ -1328,12 +1336,20 @@ class Blocks {
      * @param {object<string, Comment>} comments Map of comments referenced by id
      * @return {string} String of XML representing this block and any children.
      */
-    blockToXML (blockId, comments) {
+    blockToXML (blockId, comments, visited) {
+        if (!visited) visited = new Set();
+        // Guard against cycles in `inputs`/`next` references, which would
+        // otherwise recurse forever and overflow the stack.
+        if (visited.has(blockId)) {
+            log.error(`Circular block reference detected during XML serialization at ${blockId}; stopping`);
+            return '';
+        }
+        visited.add(blockId);
         const block = this._blocks[blockId];
         // block should exist, but currently some blocks' next property point
         // to a blockId for non-existent blocks. Until we track down that behavior,
         // this early exit allows the project to load.
-        if (!block) return;
+        if (!block) return '';
         // Encode properties of this block.
         const tagName = (block.shadow) ? 'shadow' : 'block';
         let xmlString =
@@ -1367,11 +1383,11 @@ class Blocks {
             if (blockInput.block || blockInput.shadow) {
                 xmlString += `<value name="${xmlEscape(blockInput.name)}">`;
                 if (blockInput.block) {
-                    xmlString += this.blockToXML(blockInput.block, comments);
+                    xmlString += this.blockToXML(blockInput.block, comments, visited);
                 }
                 if (blockInput.shadow && blockInput.shadow !== blockInput.block) {
                     // Obscured shadow.
-                    xmlString += this.blockToXML(blockInput.shadow, comments);
+                    xmlString += this.blockToXML(blockInput.shadow, comments, visited);
                 }
                 xmlString += '</value>';
             }
@@ -1397,7 +1413,7 @@ class Blocks {
         }
         // Add blocks connected to the next connection.
         if (block.next) {
-            xmlString += `<next>${this.blockToXML(block.next, comments)}</next>`;
+            xmlString += `<next>${this.blockToXML(block.next, comments, visited)}</next>`;
         }
         xmlString += `</${tagName}>`;
         return xmlString;
@@ -1408,7 +1424,13 @@ class Blocks {
      * @param {!object} mutation Object representing a mutation.
      * @return {string} XML string representing a mutation.
      */
-    mutationToXML (mutation) {
+    mutationToXML (mutation, depth = 0) {
+        // Guard against a cycle in `mutation.children` (or a mutation object
+        // that is missing `children`), which would otherwise recurse forever
+        // and overflow the stack.
+        if (depth > 100 || !mutation.children) {
+            return '';
+        }
         let mutationString = `<${mutation.tagName}`;
         for (const prop in mutation) {
             if (prop === 'children' || prop === 'tagName') continue;
@@ -1424,7 +1446,7 @@ class Blocks {
         }
         mutationString += '>';
         for (let i = 0; i < mutation.children.length; i++) {
-            mutationString += this.mutationToXML(mutation.children[i]);
+            mutationString += this.mutationToXML(mutation.children[i], depth + 1);
         }
         mutationString += `</${mutation.tagName}>`;
         return mutationString;

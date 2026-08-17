@@ -53,7 +53,8 @@ const mistsUtils = Object.freeze({
 });
 
 const variadic = (name, input, mutation) => {
-    const count = Math.max(2, parseInt(mutation.itemcount, 10) || 2);
+    // Guard against a corrupted or malicious project with a huge itemcount.
+    const count = Math.min(Math.max(2, parseInt(mutation.itemcount, 10) || 2), 20);
     return `Math.${name}(${Array.from({length: count}, (_, index) => input.number(`NUM${index + 1}`)).join(',')})`;
 };
 

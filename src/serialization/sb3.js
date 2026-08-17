@@ -149,11 +149,16 @@ const collapseConstants = function (blocks) {
     return blocks;
 };
 
+// Scratch does not let extendable operators have more than 20 inputs.
+// Enforce the same limit here so that a corrupted or malicious project with a
+// huge mutation.itemcount cannot block the main thread with a giant loop.
+const MAX_OPERATOR_ITEM_COUNT = 20;
+
 const getOperatorItemCount = block => {
     const mutation = block.mutation;
     if (mutation && mutation.itemcount) {
         const count = parseInt(mutation.itemcount, 10);
-        if (count >= 2) return count;
+        if (count >= 2) return Math.min(count, MAX_OPERATOR_ITEM_COUNT);
     }
     return 2;
 };

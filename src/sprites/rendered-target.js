@@ -962,6 +962,13 @@ class RenderedTarget extends Target {
         }
         this.runtime.changeCloneCounter(1);
         const newClone = this.sprite.createClone();
+        // A clone block must never produce an "original" target. `sprite.createClone`
+        // marks a clone as original only when `sprite.clones` is empty, which is
+        // correct for the editor-created original but can also be true for a runtime
+        // clone when the sprite has no live targets at that moment (e.g. after some
+        // disposal/stop sequences). Such a mis-tagged clone would show up in the
+        // sprite list and be skipped by stop-all disposal, so force it here.
+        newClone.isOriginal = false;
         // Copy all properties.
         newClone.x = this.x;
         newClone.y = this.y;
