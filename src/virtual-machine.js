@@ -1654,8 +1654,44 @@ class VirtualMachine extends EventEmitter {
             if (e && ['create', 'change', 'delete', 'var_create', 'var_delete'].includes(e.type)) {
                 this._broadcastCleanupNeeded = true;
             }
+            // Global custom blocks are always stored in the stage's block
+            // container, no matter which target created them. A sprite creating
+            // a global block therefore produces a create event whose blocks must
+            // be routed to the stage instead of the sprite.
+            if (e && e.type === 'create' && !this.editingTarget.isStage &&
+                    this.isGlobalProcedureCreateEvent_(e)) {
+                const stage = this.runtime.getTargetForStage();
+                if (stage) {
+                    stage.blocks.blocklyListen(e);
+                    // The definition now lives in the stage. Reload the current
+                    // workspace so the sprite drops the stray definition block
+                    // and the flyout picks up the global block.
+                    setTimeout(() => this.emitWorkspaceUpdate(), 0);
+                    return;
+                }
+            }
             this.editingTarget.blocks.blocklyListen(e);
         }
+    }
+
+    /**
+     * Whether a Blockly create event carries a global custom block. Global
+     * blocks are procedure definitions/prototypes whose mutation has the
+     * `global` flag set.
+     * @param {!Blockly.Event} e A Blockly create event.
+     * @return {boolean} True if the event creates a global procedure.
+     */
+    isGlobalProcedureCreateEvent_ (e) {
+        if (!e || !e.xml || typeof e.xml.querySelectorAll !== 'function') {
+            return false;
+        }
+        const mutations = e.xml.querySelectorAll('mutation');
+        for (let i = 0; i < mutations.length; i++) {
+            if (mutations[i].getAttribute('global') === 'true') {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
