@@ -22,6 +22,15 @@ class BlockUtility {
          */
         this.thread = thread;
 
+        /**
+         * Optional target override for the primitive. Set by the interpreter
+         * while executing a block that lives in another target's container
+         * (a global procedure stored in the stage), so the primitive acts on
+         * the defining target instead of the calling target ("谁定义谁动").
+         * @type {?Target}
+         */
+        this.targetOverride = null;
+
         this._nowObj = {
             now: () => this.sequencer.runtime.currentMSecs
         };
@@ -32,7 +41,7 @@ class BlockUtility {
      * @type {Target}
      */
     get target () {
-        return this.thread.target;
+        return this.targetOverride || this.thread.target;
     }
 
     /**
@@ -169,7 +178,7 @@ class BlockUtility {
      * @return {Array.<string>} List of param names for a procedure.
      */
     getProcedureParamNamesIdsAndDefaults (procedureCode) {
-        return this.thread.target.blocks.getProcedureParamNamesIdsAndDefaults(procedureCode);
+        return this.thread.target.blocks.getProcedureParamNamesIdsAndDefaultsResolved(procedureCode);
     }
 
     /**

@@ -324,6 +324,68 @@ class Blocks {
     }
 
     /**
+     * Get the stage's Blocks if it is a different container from this one.
+     * @return {?Blocks} The stage's blocks, or null if unavailable/this is the stage.
+     */
+    _getStageBlocks () {
+        if (this.runtime) {
+            const stage = this.runtime.getTargetForStage();
+            if (stage && stage.blocks !== this) {
+                return stage.blocks;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Whether a procedures_definition block (in this container) is marked as global.
+     * @param {string} definitionId ID of a procedures_definition block.
+     * @return {boolean} True if the procedure is marked global.
+     */
+    isProcedureGlobal (definitionId) {
+        const definitionBlock = this._blocks[definitionId];
+        if (!definitionBlock) return false;
+        const internal = this._getCustomBlockInternal(definitionBlock);
+        if (!internal || !internal.mutation) return false;
+        const global = internal.mutation.global;
+        return global === true || global === 'true';
+    }
+
+    /**
+     * Get the definition ID of a global procedure stored in the stage, if any.
+     * @param {string} name Name of procedure to query.
+     * @return {?string} ID of the stage's global procedure definition, or null.
+     */
+    getGlobalProcedureDefinition (name) {
+        const stageBlocks = this._getStageBlocks();
+        if (!stageBlocks) return null;
+        const definition = stageBlocks.getProcedureDefinition(name);
+        if (definition && stageBlocks.isProcedureGlobal(definition)) {
+            return definition;
+        }
+        return null;
+    }
+
+    /**
+     * Resolve a procedure definition by name, checking this container first and
+     * then falling back to global procedures stored in the stage. Returns both
+     * the definition ID and the block container that owns it.
+     * @param {string} name Name of procedure to query.
+     * @return {?{definition: string, blocks: Blocks}} The resolved definition.
+     */
+    getProcedureDefinitionResolved (name) {
+        const local = this.getProcedureDefinition(name);
+        if (local) {
+            return {definition: local, blocks: this};
+        }
+        const definition = this.getGlobalProcedureDefinition(name);
+        if (definition) {
+            return {definition, blocks: this._getStageBlocks()};
+        }
+        return null;
+    }
+
+    /**
      * Whether the procedure defined by the given block runs without screen refresh.
      * sb3 mutations store this as the string "true"/"false", so the interpreter used to
      * JSON.parse it on every single call of every custom block.
@@ -396,6 +458,24 @@ class Blocks {
         }
 
         this._cache.procedureParamNames[name] = null;
+        return null;
+    }
+
+    /**
+     * Resolve procedure params, checking this container first and then falling
+     * back to global procedures stored in the stage.
+     * @param {string} name Name of procedure to query.
+     * @return {?Array.<string>} List of param names, ids, and defaults, or null.
+     */
+    getProcedureParamNamesIdsAndDefaultsResolved (name) {
+        const local = this.getProcedureParamNamesIdsAndDefaults(name);
+        if (local) return local;
+
+        const stageBlocks = this._getStageBlocks();
+        if (!stageBlocks) return null;
+        if (this.getGlobalProcedureDefinition(name)) {
+            return stageBlocks.getProcedureParamNamesIdsAndDefaults(name);
+        }
         return null;
     }
 

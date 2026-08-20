@@ -330,7 +330,7 @@ class Sequencer {
             branchNum = 1;
         }
         const currentBlockId = thread.peekStack();
-        const branchId = thread.target.blocks.getBranch(
+        const branchId = thread.getBlocksForId(currentBlockId).getBranch(
             currentBlockId,
             branchNum
         );
@@ -349,10 +349,11 @@ class Sequencer {
      * @param {!string} procedureCode Procedure code of procedure to step to.
      */
     stepToProcedure (thread, procedureCode) {
-        const definition = thread.target.blocks.getProcedureDefinition(procedureCode);
-        if (!definition) {
+        const resolved = thread.target.blocks.getProcedureDefinitionResolved(procedureCode);
+        if (!resolved) {
             return;
         }
+        const {definition, blocks} = resolved;
         // Check if the call is recursive.
         // If so, set the thread to yield after pushing.
         const isRecursive = thread.isRecursiveCall(procedureCode);
@@ -369,7 +370,7 @@ class Sequencer {
         } else {
             // Look for warp-mode flag on definition, and set the thread
             // to warp-mode if needed.
-            const doWarp = thread.target.blocks.getProcedureWarp(definition);
+            const doWarp = blocks.getProcedureWarp(definition);
             if (doWarp) {
                 thread.peekStackFrame().warpMode = true;
             } else if (isRecursive) {

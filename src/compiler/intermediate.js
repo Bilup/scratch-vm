@@ -288,6 +288,15 @@ class IntermediateScript {
         this.isProcedure = false;
 
         /**
+         * Whether this procedure is a global (cross-target) procedure that must
+         * execute in the defining target's context (the stage) rather than the
+         * calling target's context. This corresponds to the "谁定义谁动"
+         * execution semantics for global custom blocks.
+         * @type {boolean}
+         */
+        this.isGlobal = false;
+
+        /**
          * This procedure's variant, if any.
          * @type {string}
          */

@@ -318,7 +318,7 @@ class Thread {
     stopThisScript () {
         let blockID = this.peekStack();
         while (blockID !== null) {
-            const block = this.target.blocks.getBlock(blockID);
+            const block = this.getBlocksForId(blockID).getBlock(blockID);
 
             // Reporter form of procedures_call
             if (this.peekStackFrame().waitingReporter) {
@@ -439,8 +439,37 @@ class Thread {
      * where execution proceeds from one block to the next.
      */
     goToNextBlock () {
-        const nextBlockId = this.target.blocks.getNextBlock(this.peekStack());
+        const nextBlockId = this.getBlocksForId(this.peekStack()).getNextBlock(this.peekStack());
         this.reuseStackForNextBlock(nextBlockId);
+    }
+
+    /**
+     * Resolve which Blocks container owns a given block ID. Global procedures
+     * are stored on the stage, so their block bodies live in the stage's
+     * container while the thread's own blockContainer holds the caller's
+     * blocks. Falls back to the stage and then flyout blocks before returning
+     * the thread's own container.
+     * @param {?string} blockId ID of the block to locate.
+     * @return {?Blocks} The container owning blockId.
+     */
+    getBlocksForId (blockId) {
+        if (!this.blockContainer) {
+            return null;
+        }
+        if (blockId && this.blockContainer.getBlock(blockId)) {
+            return this.blockContainer;
+        }
+        const runtime = this.target && this.target.runtime;
+        const stage = runtime && runtime.getTargetForStage();
+        const stageBlocks = stage && stage.blocks;
+        if (blockId && stageBlocks && stageBlocks !== this.blockContainer && stageBlocks.getBlock(blockId)) {
+            return stageBlocks;
+        }
+        const flyoutBlocks = runtime && runtime.flyoutBlocks;
+        if (blockId && flyoutBlocks && flyoutBlocks !== this.blockContainer && flyoutBlocks.getBlock(blockId)) {
+            return flyoutBlocks;
+        }
+        return this.blockContainer;
     }
 
     /**
@@ -453,8 +482,7 @@ class Thread {
         let callCount = 5; // Max number of enclosing procedure calls to examine.
         const sp = this.stackFrames.length - 1;
         for (let i = sp - 1; i >= 0; i--) {
-            const block = this.target.blocks.getBlock(this.stackFrames[i].op.id) ||
-                this.target.runtime.flyoutBlocks.getBlock(this.stackFrames[i].op.id);
+            const block = this.getBlocksForId(this.stackFrames[i].op.id).getBlock(this.stackFrames[i].op.id);
             if (block.opcode === 'procedures_call' &&
                 block.mutation.proccode === procedureCode) {
                 return true;
@@ -497,7 +525,10 @@ class Thread {
         } else {
             try {
                 result = compile(this);
-                if (canCache) {
+                // Scripts that depend on global (cross-target) procedures must
+                // not be cached, because editing the global procedure in another
+                // target would otherwise leave this cached result stale.
+                if (canCache && !result.usesGlobalProcedures) {
                     blocks.cacheCompileResult(topBlock, result);
                 }
             } catch (error) {

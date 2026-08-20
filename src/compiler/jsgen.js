@@ -1346,7 +1346,13 @@ class JSGenerator {
 
         // Setup the factory
         script += `(function ${this.getScriptFactoryName()}(thread) { `;
-        script += 'const target = thread.target; ';
+        if (this.script.isGlobal) {
+            // Global procedures execute in their defining target's context (the
+            // stage), regardless of which target invoked them ("谁定义谁动").
+            script += 'const target = thread.target.runtime.getTargetForStage(); ';
+        } else {
+            script += 'const target = thread.target; ';
+        }
         script += 'const runtime = target.runtime; ';
         script += 'const stage = runtime.getTargetForStage();\n';
         for (const varValue of Object.keys(this._setupVariables)) {

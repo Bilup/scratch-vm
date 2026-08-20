@@ -19,7 +19,10 @@ const compile = (/** @type {import("../engine/thread")} */ thread) => {
             return script.cachedCompileResult;
         }
 
-        const compiler = new JSGenerator(script, ir, target);
+        // Global (cross-target) procedures execute in their defining target's
+        // context (the stage), not the calling target's context ("谁定义谁动").
+        const scriptTarget = script.isGlobal ? target.runtime.getTargetForStage() : target;
+        const compiler = new JSGenerator(script, ir, scriptTarget);
         const result = compiler.compile();
         script.cachedCompileResult = result;
         return result;
@@ -36,7 +39,8 @@ const compile = (/** @type {import("../engine/thread")} */ thread) => {
     return {
         startingFunction: entry,
         procedures,
-        executableHat: ir.entry.executableHat
+        executableHat: ir.entry.executableHat,
+        usesGlobalProcedures: irGenerator.usesGlobalProcedures
     };
 };
 
