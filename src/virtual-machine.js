@@ -1733,9 +1733,14 @@ class VirtualMachine extends EventEmitter {
         // Only route definition blocks (procedures_definition hat, which
         // contains the procedures_prototype with the global mutation). Call
         // blocks must remain in the target they were dropped into.
+        // Note: the create event's XML root is the created block itself, so
+        // querySelectorAll (which only matches descendants) never matches the
+        // definition block. Check the root element explicitly as well.
+        const isDefinitionBlock = e.xml.tagName === 'block' &&
+            e.xml.getAttribute('type') === 'procedures_definition';
         const definitionBlocks = e.xml.querySelectorAll(
             'block[type="procedures_definition"]');
-        if (definitionBlocks.length === 0) {
+        if (definitionBlocks.length === 0 && !isDefinitionBlock) {
             return false;
         }
         const mutations = e.xml.querySelectorAll('mutation');
