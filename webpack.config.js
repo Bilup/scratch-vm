@@ -1,6 +1,23 @@
 const CopyWebpackPlugin = require('copy-webpack-plugin');
 const defaultsDeep = require('lodash.defaultsdeep');
+const fs = require('fs');
 const path = require('path');
+
+/**
+ * Resolve a module path without crashing the whole webpack config when the
+ * module is absent. Some package managers (e.g. bun) install git dependencies
+ * with a slightly different layout, so a file that normally exists
+ * (e.g. scratch-blocks/shim/vertical.js) may be missing.
+ * @param {string} modulePath - module id to resolve
+ * @return {string|null} resolved absolute path, or null when unavailable
+ */
+const resolveIfAvailable = modulePath => {
+    try {
+        return require.resolve(modulePath);
+    } catch (e) {
+        return null;
+    }
+};
 
 const base = {
     mode: process.env.NODE_ENV === 'production' ? 'production' : 'development',
@@ -100,32 +117,36 @@ module.exports = [
                     test: require.resolve('./src/extensions/scratch3_video_sensing/debug.js'),
                     loader: 'expose-loader?Scratch3VideoSensingDebug'
                 },
+                // expose-loader 规则按需启用：第三方包（尤其是通过 bun 等包管理器安装的
+                // git 依赖）可能缺少特定子路径文件（如 scratch-blocks/shim/vertical.js）。
+                // 此时跳过对应规则，避免 playground 构建在配置加载阶段直接崩溃。
                 {
-                    test: require.resolve('stats.js/build/stats.min.js'),
+                    test: resolveIfAvailable('stats.js/build/stats.min.js'),
                     loader: 'script-loader'
                 },
                 {
-                    test: require.resolve('scratch-blocks/shim/vertical.js'),
+                    test: resolveIfAvailable('scratch-blocks/shim/vertical.js'),
                     loader: 'expose-loader?Blockly'
                 },
                 {
-                    test: require.resolve('scratch-audio/src/index.js'),
+                    test: resolveIfAvailable('scratch-audio/src/index.js'),
                     loader: 'expose-loader?AudioEngine'
                 },
                 {
-                    test: require.resolve('scratch-storage/src/index.js'),
+                    test: resolveIfAvailable('scratch-storage/src/index.js'),
                     loader: 'expose-loader?ScratchStorage'
                 },
                 {
-                    test: require.resolve('scratch-render/src/index.js'),
+                    test: resolveIfAvailable('scratch-render/src/index.js'),
                     loader: 'expose-loader?ScratchRender'
                 }
-            ])
+            ].filter(rule => rule.test !== null))
         },
         performance: {
             hints: false
         },
         plugins: base.plugins.concat([
+            // 只拷贝实际存在的目录：某些包管理器（如 bun）安装 git 依赖时可能缺少部分文件
             new CopyWebpackPlugin([{
                 from: 'node_modules/scratch-blocks/media',
                 to: 'media'
@@ -137,7 +158,7 @@ module.exports = [
                 from: 'node_modules/@bilup/scratch-svg-renderer/dist/web'
             }, {
                 from: 'src/playground'
-            }])
+            }].filter(copy => fs.existsSync(path.resolve(copy.from))))
         ])
     })
 ];
