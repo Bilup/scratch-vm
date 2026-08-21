@@ -10,50 +10,56 @@ const scriptCallbacks = new Map();
 const setScript = (src, callback) => {
     scriptCallbacks.set(src, callback);
 };
-global.document = {
-    createElement: tagName => {
-        const tag = tagName.toLowerCase();
-        if (tag === 'script') {
-            return {
-                tagName: 'SCRIPT',
-                src: '',
-                onload: () => {},
-                onerror: () => {}
-            };
-        }
-        // prefetchExtensionScript appends a <link rel=preload> to speed up downloads.
-        if (tag === 'link') {
-            return {
-                tagName: 'LINK',
-                rel: '',
-                as: '',
-                href: '',
-                onload: () => {},
-                onerror: () => {},
-                remove: () => {}
-            };
-        }
-        throw new Error(`Unknown element: ${tagName}`);
-    },
-    head: {
-        appendChild: () => {}
-    },
-    body: {
-        appendChild: element => {
-            if (element.tagName === 'SCRIPT') {
-                setTimeout(() => {
-                    const callback = scriptCallbacks.get(element.src);
-                    if (callback) {
-                        callback();
-                        element.onload();
-                    } else {
-                        element.onerror();
-                    }
-                }, 50);
+
+// Some tests (e.g. the download test) replace global.document with a minimal mock,
+// so provide a reusable reset that restores the full document mock.
+const resetDocumentMock = () => {
+    global.document = {
+        createElement: tagName => {
+            const tag = tagName.toLowerCase();
+            if (tag === 'script') {
+                return {
+                    tagName: 'SCRIPT',
+                    src: '',
+                    onload: () => {},
+                    onerror: () => {}
+                };
+            }
+            // prefetchExtensionScript appends a <link rel=preload> to speed up downloads.
+            if (tag === 'link') {
+                return {
+                    tagName: 'LINK',
+                    rel: '',
+                    as: '',
+                    href: '',
+                    onload: () => {},
+                    onerror: () => {},
+                    remove: () => {}
+                };
+            }
+            throw new Error(`Unknown element: ${tagName}`);
+        },
+        head: {
+            appendChild: () => {}
+        },
+        body: {
+            appendChild: element => {
+                if (element.tagName === 'SCRIPT') {
+                    setTimeout(() => {
+                        const callback = scriptCallbacks.get(element.src);
+                        if (callback) {
+                            callback();
+                            element.onload();
+                        } else {
+                            element.onerror();
+                        }
+                    }, 50);
+                }
             }
         }
-    }
+    };
 };
+resetDocumentMock();
 
 // Mock various DOM APIs for fetching, window opening, redirecting, etc.
 global.Request = class {
@@ -545,5 +551,84 @@ test('CREATE_UNSANDBOXED_EXTENSION_API', t => {
     });
     UnsandboxedExtensionRunner.setupUnsandboxedExtensionAPI(vm);
     t.equal(global.Scratch.extraStuff, 'aaaa');
+    t.end();
+});
+
+test('async registration after script load is forwarded via onRegister', async t => {
+    resetDocumentMock();
+    const vm = new VirtualMachine();
+    class Extension1 {}
+    class Extension2 {}
+    // The script registers nothing synchronously, then registers two extensions
+    // asynchronously long after the script element has finished loading.
+    setScript('https://turbowarp.org/async-multi.js', async () => {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        global.Scratch.extensions.register(new Extension1());
+        await new Promise(resolve => setTimeout(resolve, 50));
+        global.Scratch.extensions.register(new Extension2());
+    });
+
+    const forwarded = [];
+    const objects = await UnsandboxedExtensionRunner.load(
+        'https://turbowarp.org/async-multi.js',
+        vm,
+        extensionObject => forwarded.push(extensionObject)
+    );
+    // The live array includes both objects (collected during the quiet period)...
+    t.equal(objects.length, 2);
+    t.ok(objects[0] instanceof Extension1);
+    t.ok(objects[1] instanceof Extension2);
+    // ...and onRegister was called for each as it registered.
+    t.equal(forwarded.length, 2);
+    t.ok(forwarded[0] instanceof Extension1);
+    t.ok(forwarded[1] instanceof Extension2);
+    t.end();
+});
+
+test('register() remains usable for multiple async registrations', async t => {
+    resetDocumentMock();
+    // Regression test: previously, the first register() resolved the load and a
+    // teardown replaced Scratch.extensions.register with a function that threw
+    // "Too late to register new extensions.", so later registrations were lost.
+    const vm = new VirtualMachine();
+    const registered = [];
+    class Extension1 {}
+    class Extension2 {}
+    setScript('https://turbowarp.org/async-two.js', () => {
+        global.Scratch.extensions.register(new Extension1());
+        setTimeout(() => {
+            global.Scratch.extensions.register(new Extension2());
+        }, 30);
+    });
+
+    await UnsandboxedExtensionRunner.load('https://turbowarp.org/async-two.js', vm, obj => registered.push(obj));
+    // Wait for the late registration to be forwarded.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    t.equal(registered.length, 2);
+    t.ok(registered[0] instanceof Extension1);
+    t.ok(registered[1] instanceof Extension2);
+    t.end();
+});
+
+test('extension manager loads async-registered unsandboxed extension', async t => {
+    resetDocumentMock();
+    const vm = new VirtualMachine();
+    vm.securityManager.getSandboxMode = () => 'unsandboxed';
+    class AsyncExtension {
+        getInfo () {
+            return {
+                id: 'asyncext',
+                blocks: []
+            };
+        }
+    }
+    setScript('https://turbowarp.org/async-manager.js', async () => {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        global.Scratch.extensions.register(new AsyncExtension());
+    });
+
+    await vm.extensionManager.loadExtensionURL('https://turbowarp.org/async-manager.js');
+    t.ok(vm.extensionManager.isExtensionLoaded('asyncext'), 'async-registered extension was loaded');
+    t.ok(vm.extensionManager.isExtensionURLLoaded('https://turbowarp.org/async-manager.js'), 'URL marked as loaded');
     t.end();
 });

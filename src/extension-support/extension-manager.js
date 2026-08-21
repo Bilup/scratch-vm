@@ -257,20 +257,32 @@ class ExtensionManager {
 
         if (sandboxMode === 'unsandboxed') {
             const {load} = require('./tw-unsandboxed-extension-runner');
-            const extensionObjects = await load(rewritten, this.vm)
-                .catch(error => this._failedLoadingExtensionScript(error));
             const fakeWorkerId = this.nextExtensionWorker++;
             this.workerURLs[fakeWorkerId] = extensionURL;
 
-            for (const extensionObject of extensionObjects) {
-                const extensionInfo = extensionObject.getInfo();
-                const serviceName = `unsandboxed.${fakeWorkerId}.${extensionInfo.id}`;
-                dispatch.setServiceSync(serviceName, extensionObject);
-                dispatch.callSync('extensions', 'registerExtensionServiceSync', serviceName);
-                this.runtime.compilerRegisterExtension(extensionInfo.id, extensionObject);
-                this._loadedExtensions.set(extensionInfo.id, serviceName);
-            }
+            // Every extension object is registered the moment the script registers it,
+            // instead of only processing a snapshot taken when the script finished
+            // loading. This supports scripts that register multiple extensions or
+            // register asynchronously (e.g. after an await/fetch), which previously
+            // failed with "Too late to register new extensions." once the first
+            // object had been handled.
+            const registerUnsandboxedExtension = extensionObject => {
+                try {
+                    const extensionInfo = extensionObject.getInfo();
+                    const serviceName = `unsandboxed.${fakeWorkerId}.${extensionInfo.id}`;
+                    dispatch.setServiceSync(serviceName, extensionObject);
+                    dispatch.callSync('extensions', 'registerExtensionServiceSync', serviceName);
+                    this.runtime.compilerRegisterExtension(extensionInfo.id, extensionObject);
+                    this._loadedExtensions.set(extensionInfo.id, serviceName);
+                } catch (e) {
+                    // A single broken extension object should not prevent other
+                    // objects (or extensions) from loading.
+                    log.error(`Failed to register unsandboxed extension object from ${extensionURL}:`, e);
+                }
+            };
 
+            await load(rewritten, this.vm, registerUnsandboxedExtension)
+                .catch(error => this._failedLoadingExtensionScript(error));
             this._finishedLoadingExtensionScript();
             return;
         }

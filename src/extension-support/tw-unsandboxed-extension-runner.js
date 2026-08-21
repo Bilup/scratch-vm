@@ -21,12 +21,23 @@ const parseURL = url => {
 /**
  * Sets up the global.Scratch API for an unsandboxed extension.
  * @param {VirtualMachine} vm
+ * @param {Function} [onRegister] Optional callback invoked with every extension object
+ *   as it is registered. When provided, objects are forwarded immediately, which
+ *   supports scripts that register multiple extensions or register asynchronously
+ *   (e.g. after an await/fetch). Without it, only the array is collected.
  * @returns {Promise<object[]>} Resolves with a list of extension objects when Scratch.extensions.register is called.
  */
-const setupUnsandboxedExtensionAPI = vm => new Promise(resolve => {
+const setupUnsandboxedExtensionAPI = (vm, onRegister) => new Promise(resolve => {
     const extensionObjects = [];
     const register = extensionObject => {
         extensionObjects.push(extensionObject);
+        if (typeof onRegister === 'function') {
+            try {
+                onRegister(extensionObject);
+            } catch (e) {
+                console.error('Error forwarding unsandboxed extension object:', e);
+            }
+        }
         resolve(extensionObjects);
     };
 
@@ -181,43 +192,77 @@ const setupUnsandboxedExtensionAPI = vm => new Promise(resolve => {
 });
 
 /**
- * Disable the existing global.Scratch unsandboxed extension APIs.
- * This helps debug poorly designed extensions.
- */
-const teardownUnsandboxedExtensionAPI = () => {
-    // Check if global.Scratch exists before trying to access it
-    if (global.Scratch && global.Scratch.extensions) {
-        global.Scratch.extensions.register = () => {
-            throw new Error('Too late to register new extensions.');
-        };
-    }
-
-    // Remove ScratchX alias between loads to keep global state clean.
-    delete global.ScratchExtensions;
-};
-
-/**
  * Load an unsandboxed extension from an arbitrary URL. This is dangerous.
  * @param {string} extensionURL
- * @param {Virtualmachine} vm
- * @returns {Promise<object[]>} Resolves with a list of extension objects if the extension was loaded successfully.
+ * @param {VirtualMachine} vm
+ * @param {Function} [onRegister] Optional callback invoked with every extension object
+ *   the script registers. Because registrations are forwarded immediately, scripts that
+ *   register multiple extensions or register asynchronously (after an await/fetch/etc.)
+ *   work correctly. When omitted, the returned array only contains the objects that were
+ *   registered before the script finished loading.
+ * @returns {Promise<object[]>} Resolves with a list of extension objects registered by
+ *   the script (the same live array is returned, so late registrations are still pushed).
  */
-const loadUnsandboxedExtension = (extensionURL, vm) => new Promise((resolve, reject) => {
+const loadUnsandboxedExtension = (extensionURL, vm, onRegister) => new Promise((resolve, reject) => {
     let isResolved = false;
-    let registrationTimeout = null;
+    let scriptLoaded = false;
+    let registrationWindow = null;
     let overallTimeout = null;
+
+    // Live list of every extension object the script registers. Kept in the outer scope
+    // so that late (async) registrations are pushed to the same array the promise resolves
+    // with, even after the script element has already finished loading.
+    const registeredObjects = [];
 
     const settle = (fn, arg) => {
         if (isResolved) return;
         isResolved = true;
-        clearTimeout(registrationTimeout);
+        clearTimeout(registrationWindow);
         clearTimeout(overallTimeout);
         fn(arg);
     };
 
-    setupUnsandboxedExtensionAPI(vm)
-        .then(extensionObjects => settle(resolve, extensionObjects))
+    // After the script has executed, wait a short "quiet period" before considering the
+    // load finished. This collects scripts that register several extensions in quick
+    // succession, and gives slow async registrations (after an await/fetch/etc.) a
+    // chance to complete before the load queue moves on and replaces global.Scratch.
+    // Each new registration restarts the window. Scripts that never register get a
+    // longer window so genuinely slow registrations are not killed immediately.
+    const armRegistrationWindow = () => {
+        const delay = registeredObjects.length > 0 ? 100 : 5000;
+        clearTimeout(registrationWindow);
+        registrationWindow = setTimeout(() => settle(resolve, registeredObjects), delay);
+    };
+
+    const forwardRegistration = extensionObject => {
+        registeredObjects.push(extensionObject);
+        if (typeof onRegister === 'function') {
+            try {
+                onRegister(extensionObject);
+            } catch (e) {
+                console.error('Error registering unsandboxed extension object:', e);
+            }
+        }
+        // If the script has already finished executing, restart the quiet period so
+        // objects registered in quick succession are all collected before resolving.
+        if (scriptLoaded && !isResolved) {
+            armRegistrationWindow();
+        }
+    };
+
+    setupUnsandboxedExtensionAPI(vm, forwardRegistration)
+        .then(() => {
+            // The script called register(). Enter the quiet period so all registrations
+            // are collected before resolving. This also covers environments where the
+            // script element's onload event is never fired (e.g. tests with a minimal
+            // document mock), which previously resolved the load directly on register().
+            scriptLoaded = true;
+            if (!isResolved) {
+                armRegistrationWindow();
+            }
+        })
         .catch(error => {
+            // setup should never reject, but handle it defensively.
             error.url = extensionURL;
             error.type = 'registration-error';
             settle(reject, error);
@@ -234,21 +279,17 @@ const loadUnsandboxedExtension = (extensionURL, vm) => new Promise((resolve, rej
         settle(reject, error);
     };
 
-    // Only start the registration deadline once the script has actually executed. A well-behaved
-    // extension calls register() synchronously as it runs, so it has already resolved by now; this
-    // grace period only catches scripts that ran but never registered. Arming it before the script
-    // executes (e.g. during a slow download) would release the load queue while this script is
-    // still pending, letting the next extension's global.Scratch capture this one's late
-    // register() call. See tw-unsandboxed-extension-runner registration serialization.
+    // The script has executed. Enter the registration quiet period; extension objects
+    // keep flowing through forwardRegistration (and therefore onRegister) with no
+    // artificial deadline, so async/multi-object registrations are not lost.
     script.onload = () => {
         if (isResolved) return;
-        registrationTimeout = setTimeout(() => {
-            const error = new Error(`Extension did not register within timeout period`);
-            error.url = extensionURL;
-            error.type = 'registration-timeout';
-            console.error(`Extension registration timeout for ${extensionURL}:`, error);
-            settle(reject, error);
-        }, 10000); // 10 second registration deadline, measured from script execution
+        scriptLoaded = true;
+        if (registeredObjects.length === 0) {
+            // eslint-disable-next-line max-len
+            console.warn(`Unsandboxed extension script ${extensionURL} loaded but did not register any extensions yet.`);
+        }
+        armRegistrationWindow();
     };
 
     // Catch scripts that never load or execute at all.
@@ -262,15 +303,7 @@ const loadUnsandboxedExtension = (extensionURL, vm) => new Promise((resolve, rej
 
     script.src = extensionURL;
     document.body.appendChild(script);
-})
-    .then(objects => {
-        teardownUnsandboxedExtensionAPI();
-        return objects;
-    })
-    .catch(error => {
-        teardownUnsandboxedExtensionAPI();
-        throw error;
-    });
+});
 
 const prefetchExtensionScript = extensionURL => {
     if (typeof document === 'undefined') {
@@ -286,16 +319,18 @@ const prefetchExtensionScript = extensionURL => {
     link.href = extensionURL;
     link.onload = () => link.remove();
     link.onerror = () => link.remove();
-    document.head.appendChild(link);
+    if (document.head) {
+        document.head.appendChild(link);
+    }
 };
 
 // Because loading unsandboxed extensions requires messing with global state (global.Scratch),
 // only let one extension register at a time. The script download is started up front (in
 // parallel across extensions) so only the registration step is serialized.
 const limiter = new AsyncLimiter(loadUnsandboxedExtension, 1);
-const load = (extensionURL, vm) => {
+const load = (extensionURL, vm, onRegister) => {
     prefetchExtensionScript(extensionURL);
-    return limiter.do(extensionURL, vm);
+    return limiter.do(extensionURL, vm, onRegister);
 };
 
 module.exports = {

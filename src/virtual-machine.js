@@ -1646,6 +1646,48 @@ class VirtualMachine extends EventEmitter {
     }
 
     /**
+     * Update a global (cross-target) procedure after it has been edited from
+     * any target. The definition lives in the stage, so the prototype there
+     * must be updated along with every caller block that references the old
+     * procCode (which may live on any target). Then broadcast a workspace
+     * update so every flyout and workspace picks up the new mutation.
+     * @param {string} oldProcCode The procCode of the procedure being edited.
+     * @param {string} mutationXml The new `<mutation>` XML for the procedure.
+     */
+    updateGlobalProcedure (oldProcCode, mutationXml) {
+        const mutationAdapter = require('./engine/mutation-adapter');
+        const stage = this.runtime.getTargetForStage();
+        if (!stage) return;
+        // Update the stage's prototype definition.
+        const stageBlocks = stage.blocks._blocks;
+        for (const id in stageBlocks) {
+            if (!Object.prototype.hasOwnProperty.call(stageBlocks, id)) continue;
+            const block = stageBlocks[id];
+            if (block.opcode === 'procedures_prototype' &&
+                    block.mutation && block.mutation.proccode === oldProcCode) {
+                block.mutation = mutationAdapter(mutationXml);
+            }
+        }
+        // Update every caller of the procedure across all targets.
+        for (const target of this.runtime.targets) {
+            const blocks = target.blocks._blocks;
+            for (const id in blocks) {
+                if (!Object.prototype.hasOwnProperty.call(blocks, id)) continue;
+                const block = blocks[id];
+                if (block.opcode === 'procedures_call' &&
+                        block.mutation && block.mutation.proccode === oldProcCode) {
+                    block.mutation = mutationAdapter(mutationXml);
+                }
+            }
+        }
+        // The procCode may have changed; drop the stale name→definition caches
+        // so the runtime resolves calls against the new name.
+        stage.blocks.resetCache();
+        this.runtime.requestBlocksUpdate();
+        this.emitWorkspaceUpdate();
+    }
+
+    /**
      * Handle a Blockly event for the current editing target.
      * @param {!Blockly.Event} e Any Blockly event.
      */
@@ -1675,14 +1717,25 @@ class VirtualMachine extends EventEmitter {
     }
 
     /**
-     * Whether a Blockly create event carries a global custom block. Global
-     * blocks are procedure definitions/prototypes whose mutation has the
-     * `global` flag set.
+     * Whether a Blockly create event carries a global custom block
+     * *definition*. Global blocks are procedure definitions/prototypes whose
+     * mutation has the `global` flag set. A plain `procedures_call` block
+     * dragged from the flyout also carries a global-flagged mutation (it is
+     * generated from the collected global mutations), but it is a caller that
+     * must stay in the current target — only definition events are routed.
      * @param {!Blockly.Event} e A Blockly create event.
-     * @return {boolean} True if the event creates a global procedure.
+     * @return {boolean} True if the event creates a global procedure definition.
      */
     isGlobalProcedureCreateEvent_ (e) {
         if (!e || !e.xml || typeof e.xml.querySelectorAll !== 'function') {
+            return false;
+        }
+        // Only route definition blocks (procedures_definition hat, which
+        // contains the procedures_prototype with the global mutation). Call
+        // blocks must remain in the target they were dropped into.
+        const definitionBlocks = e.xml.querySelectorAll(
+            'block[type="procedures_definition"]');
+        if (definitionBlocks.length === 0) {
             return false;
         }
         const mutations = e.xml.querySelectorAll('mutation');
