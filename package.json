@@ -85,7 +85,7 @@
     "lodash.defaultsdeep": "4.6.1",
     "pngjs": "3.3.3",
     "scratch-audio": "github:Bilup/scratch-audio#develop",
-    "scratch-blocks": "github:Bilup/scratch-blocks#develop-builds",
+    "scratch-blocks": "github:Bilup/new-scratch-blocks#develop-builds",
     "scratch-l10n": "github:Bilup/scratch-l10n#develop-builds",
     "scratch-render": "github:Bilup/scratch-render#develop-builds",
     "scratch-render-fonts": "github:Bilup/scratch-render-fonts#main",
