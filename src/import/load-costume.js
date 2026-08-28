@@ -189,7 +189,7 @@ const readImage = new AsyncLimiter(_persistentReadImage, MAX_CONCURRENT_IMAGE_DE
  *     or reject on error.
  *     assetMatchesBase is true if the asset matches the base layer; false if it required adjustment
  */
-const fetchBitmapCanvas_ = function (costume, runtime, rotationCenter) {
+const fetchBitmapCanvas_ = function (costume, runtime, rotationCenter, assetLoad) {
     if (!costume || !costume.asset) { // TODO: We can probably remove this check...
         // TODO: reject with an Error (breaking API change!)
         // eslint-disable-next-line prefer-promise-reject-errors
@@ -206,7 +206,9 @@ const fetchBitmapCanvas_ = function (costume, runtime, rotationCenter) {
             return null;
         }
 
-        return readImage.do(asset);
+        return assetLoad ?
+            assetLoad.cacheImage(asset, () => readImage.do(asset)) :
+            readImage.do(asset);
     }))
         .then(([baseImageElement, textImageElement]) => {
             if (!baseImageElement) {
@@ -286,7 +288,7 @@ const toDataURL = imageOrCanvas => {
     return url;
 };
 
-const loadBitmap_ = function (costume, runtime, _rotationCenter) {
+const loadBitmap_ = function (costume, runtime, _rotationCenter, assetLoad) {
     if (!runtime.renderer) {
         log.warn('No rendering module present; cannot load costume');
         costume.skinId = -1;
@@ -299,7 +301,7 @@ const loadBitmap_ = function (costume, runtime, _rotationCenter) {
         return Promise.resolve(costume);
     }
 
-    return fetchBitmapCanvas_(costume, runtime, _rotationCenter)
+    return fetchBitmapCanvas_(costume, runtime, _rotationCenter, assetLoad)
         .then(fetched => {
             const updateCostumeAsset = function (dataURI) {
                 if (!runtime.v2BitmapAdapter) {
@@ -371,7 +373,7 @@ const loadBitmap_ = function (costume, runtime, _rotationCenter) {
 // Handle all manner of costume errors with a Gray Question Mark (default costume)
 // and preserve as much of the original costume data as possible
 // Returns a promise of a costume
-const handleCostumeLoadError = function (costume, runtime) {
+const handleCostumeLoadError = function (costume, runtime, assetLoad) {
     // Keep track of the old asset information until we're done loading the default costume
     const oldAsset = costume.asset; // could be null
     const oldAssetId = costume.assetId;
@@ -391,7 +393,7 @@ const handleCostumeLoadError = function (costume, runtime) {
     costume.md5 = `${costume.assetId}.${costume.asset.dataFormat}`;
 
     const defaultCostumePromise = (isVector) ?
-        loadVector_(costume, runtime) : loadBitmap_(costume, runtime);
+        loadVector_(costume, runtime) : loadBitmap_(costume, runtime, null, assetLoad);
 
     return defaultCostumePromise.then(loadedCostume => {
         loadedCostume.broken = {};
@@ -421,9 +423,10 @@ const handleCostumeLoadError = function (costume, runtime) {
  * @param {!Runtime} runtime - Scratch runtime, used to access the storage module.
  * @param {?int} optVersion - Version of Scratch that the costume comes from. If this is set
  *     to 2, scratch 3 will perform an upgrade step to handle quirks in SVGs from Scratch 2.0.
+ * @param {ProjectAssetLoad} [assetLoad] - project-scoped image decode cache
  * @returns {?Promise} - a promise which will resolve after skinId is set, or null on error.
  */
-const loadCostumeFromAsset = function (costume, runtime, optVersion) {
+const loadCostumeFromAsset = function (costume, runtime, optVersion, assetLoad) {
     costume.assetId = costume.asset.assetId;
     const renderer = runtime.renderer;
     if (!renderer) {
@@ -442,14 +445,14 @@ const loadCostumeFromAsset = function (costume, runtime, optVersion) {
         return loadVector_(costume, runtime, rotationCenter, optVersion)
             .catch(error => {
                 log.warn(`Error loading vector image: ${error}`);
-                return handleCostumeLoadError(costume, runtime);
+                return handleCostumeLoadError(costume, runtime, assetLoad);
 
             });
     }
-    return loadBitmap_(costume, runtime, rotationCenter, optVersion)
+    return loadBitmap_(costume, runtime, rotationCenter, assetLoad)
         .catch(error => {
             log.warn(`Error loading bitmap image: ${error}`);
-            return handleCostumeLoadError(costume, runtime);
+            return handleCostumeLoadError(costume, runtime, assetLoad);
         });
 };
 
@@ -466,9 +469,11 @@ const loadCostumeFromAsset = function (costume, runtime, optVersion) {
  * @param {!Runtime} runtime - Scratch runtime, used to access the storage module.
  * @param {?int} optVersion - Version of Scratch that the costume comes from. If this is set
  *     to 2, scratch 3 will perform an upgrade step to handle quirks in SVGs from Scratch 2.0.
+ * @param {Promise<Asset>} [assetPromise] - project-scoped shared asset request
+ * @param {ProjectAssetLoad} [assetLoad] - project-scoped image decode cache
  * @returns {?Promise} - a promise which will resolve after skinId is set, or null on error.
  */
-const loadCostume = function (md5ext, costume, runtime, optVersion) {
+const loadCostume = function (md5ext, costume, runtime, optVersion, assetPromise, assetLoad) {
     const idParts = StringUtil.splitFirst(md5ext, '.');
     const md5 = idParts[0];
     const ext = idParts[1].toLowerCase();
@@ -476,7 +481,7 @@ const loadCostume = function (md5ext, costume, runtime, optVersion) {
 
     if (costume.asset) {
         // Costume comes with asset. It could be coming from image upload, drag and drop, or file
-        return loadCostumeFromAsset(costume, runtime, optVersion);
+        return loadCostumeFromAsset(costume, runtime, optVersion, assetLoad);
     }
 
     // Need to load the costume from storage. The server should have a reference to this md5.
@@ -493,7 +498,7 @@ const loadCostume = function (md5ext, costume, runtime, optVersion) {
     const AssetType = runtime.storage.AssetType;
     const assetType = (ext === 'svg') ? AssetType.ImageVector : AssetType.ImageBitmap;
 
-    const costumePromise = runtime.storage.load(assetType, md5, ext);
+    const costumePromise = assetPromise || runtime.storage.load(assetType, md5, ext);
 
     let textLayerPromise;
     if (costume.textLayerMD5) {
@@ -507,19 +512,19 @@ const loadCostume = function (md5ext, costume, runtime, optVersion) {
             if (assetArray[0]) {
                 costume.asset = assetArray[0];
             } else {
-                return handleCostumeLoadError(costume, runtime);
+                return handleCostumeLoadError(costume, runtime, assetLoad);
             }
 
             if (assetArray[1]) {
                 costume.textLayerAsset = assetArray[1];
             }
-            return loadCostumeFromAsset(costume, runtime, optVersion);
+            return loadCostumeFromAsset(costume, runtime, optVersion, assetLoad);
         })
         .catch(error => {
             // Handle case where storage.load rejects with errors
             // instead of resolving null
             log.warn('Error loading costume: ', error);
-            return handleCostumeLoadError(costume, runtime);
+            return handleCostumeLoadError(costume, runtime, assetLoad);
         });
 };
 
