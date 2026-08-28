@@ -143,9 +143,9 @@ class Profiler {
          * An array of profiler frames separated by counter argument. Generally
          * for Scratch these frames are separated by block function opcode.
          * This tracks each time an opcode is called.
-         * @type {Array.<ProfilerFrame>}
+         * @type {Map.<string, ProfilerFrame>}
          */
-        this.counters = [];
+        this.counters = new Map();
 
         /**
          * A frame with no id or argument.
@@ -219,17 +219,15 @@ class Profiler {
      *   incremented for each call.
      */
     frame (id, arg) {
-        for (let i = 0; i < this.counters.length; i++) {
-            if (this.counters[i].id === id && this.counters[i].arg === arg) {
-                return this.counters[i];
-            }
+        const key = `${id}:${arg}`;
+        let counter = this.counters.get(key);
+        if (!counter) {
+            counter = new ProfilerFrame(-1);
+            counter.id = id;
+            counter.arg = arg;
+            this.counters.set(key, counter);
         }
-
-        const newCounter = new ProfilerFrame(-1);
-        newCounter.id = id;
-        newCounter.arg = arg;
-        this.counters.push(newCounter);
-        return newCounter;
+        return counter;
     }
 
     /**
@@ -307,10 +305,10 @@ class Profiler {
             }
         }
 
-        for (let k = 0; k < this.counters.length; k++) {
-            if (this.counters[k].count > 0) {
-                this.onFrame(this.counters[k]);
-                this.counters[k].count = 0;
+        for (const counter of this.counters.values()) {
+            if (counter.count > 0) {
+                this.onFrame(counter);
+                counter.count = 0;
             }
         }
 

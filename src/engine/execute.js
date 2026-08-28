@@ -245,12 +245,6 @@ class BlockCached {
         this._shadowValue = null;
 
         /**
-         * A copy of the block's fields that may be modified.
-         * @type {object}
-         */
-        this._fields = Object.assign({}, this.fields);
-
-        /**
          * A copy of the block's inputs that may be modified.
          * @type {object}
          */

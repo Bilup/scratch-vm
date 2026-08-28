@@ -297,10 +297,10 @@ class Runtime extends EventEmitter {
         this._flowing = {};
 
         /**
-         * A list of script block IDs that were glowing during the previous frame.
-         * @type {!Array.<!string>}
+         * A set of script block IDs that were glowing during the previous frame.
+         * @type {!Set.<!string>}
          */
-        this._scriptGlowsPreviousFrame = [];
+        this._scriptGlowsPreviousFrame = new Set();
 
         /**
          * Number of non-monitor threads running during the previous frame.
@@ -2798,7 +2798,7 @@ class Runtime extends EventEmitter {
         const oldEditingTarget = this._editingTarget;
         this._editingTarget = editingTarget;
         // Script glows must be cleared.
-        this._scriptGlowsPreviousFrame = [];
+        this._scriptGlowsPreviousFrame.clear();
         this._updateGlows();
 
         if (oldEditingTarget !== this._editingTarget) {
@@ -3164,7 +3164,7 @@ class Runtime extends EventEmitter {
                         );
                     }
                     if (script) {
-                        requestedGlowsThisFrame.push(script);
+                        requestedGlowsThisFrame.add(script);
                     }
                 }
             }
@@ -3179,35 +3179,33 @@ class Runtime extends EventEmitter {
     _updateGlows (optExtraThreads) {
         // Without an editing target no thread can request a glow, so there is only
         // work to do if glows from a previous frame still need clearing.
-        if (!this._editingTarget && this._scriptGlowsPreviousFrame.length === 0) {
+        if (!this._editingTarget && this._scriptGlowsPreviousFrame.size === 0) {
             return;
         }
         // Set of scripts that request a glow this frame.
-        const requestedGlowsThisFrame = [];
+        const requestedGlowsThisFrame = new Set();
         // Final set of scripts glowing during this frame.
-        const finalScriptGlows = [];
+        const finalScriptGlows = new Set();
         // Find all scripts that should be glowing.
         this._collectRequestedGlows(this.threads, requestedGlowsThisFrame);
         if (optExtraThreads) {
             this._collectRequestedGlows(optExtraThreads, requestedGlowsThisFrame);
         }
         // Compare to previous frame.
-        for (let j = 0; j < this._scriptGlowsPreviousFrame.length; j++) {
-            const previousFrameGlow = this._scriptGlowsPreviousFrame[j];
-            if (requestedGlowsThisFrame.indexOf(previousFrameGlow) < 0) {
+        for (const previousFrameGlow of this._scriptGlowsPreviousFrame) {
+            if (requestedGlowsThisFrame.has(previousFrameGlow)) {
+                // Still glowing.
+                finalScriptGlows.add(previousFrameGlow);
+            } else {
                 // Glow turned off.
                 this.glowScript(previousFrameGlow, false);
-            } else {
-                // Still glowing.
-                finalScriptGlows.push(previousFrameGlow);
             }
         }
-        for (let k = 0; k < requestedGlowsThisFrame.length; k++) {
-            const currentFrameGlow = requestedGlowsThisFrame[k];
-            if (this._scriptGlowsPreviousFrame.indexOf(currentFrameGlow) < 0) {
+        for (const currentFrameGlow of requestedGlowsThisFrame) {
+            if (!this._scriptGlowsPreviousFrame.has(currentFrameGlow)) {
                 // Glow turned on.
                 this.glowScript(currentFrameGlow, true);
-                finalScriptGlows.push(currentFrameGlow);
+                finalScriptGlows.add(currentFrameGlow);
             }
         }
         this._scriptGlowsPreviousFrame = finalScriptGlows;
@@ -3236,10 +3234,7 @@ class Runtime extends EventEmitter {
      * @param {!string} scriptBlockId Id of top-level block in script to quiet.
      */
     quietGlow (scriptBlockId) {
-        const index = this._scriptGlowsPreviousFrame.indexOf(scriptBlockId);
-        if (index > -1) {
-            this._scriptGlowsPreviousFrame.splice(index, 1);
-        }
+        this._scriptGlowsPreviousFrame.delete(scriptBlockId);
     }
 
     /**

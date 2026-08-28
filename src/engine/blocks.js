@@ -279,6 +279,9 @@ class Blocks {
      * @return {?string} ID of top-level script block.
      */
     getTopLevelScript (id) {
+        if (Object.prototype.hasOwnProperty.call(this._cache.topLevelScripts, id)) {
+            return this._cache.topLevelScripts[id];
+        }
         let block = this._blocks[id];
         if (typeof block === 'undefined') return null;
         // Guard against a cycle in the `parent` chain, which would otherwise
@@ -292,6 +295,7 @@ class Blocks {
             visited.add(block.parent);
             block = this._blocks[block.parent];
         }
+        this._cache.topLevelScripts[id] = block.id;
         return block.id;
     }
 
@@ -825,6 +829,7 @@ class Blocks {
         this._cache.compiledScripts = {};
         this._cache.compiledProcedures = {};
         this._cache.proceduresPopulated = false;
+        this._cache.topLevelScripts = {};
     }
 
     /**
