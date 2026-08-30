@@ -171,6 +171,8 @@ class Sequencer {
                         if (this.runtime.threadMap.get(thread.getId()) === thread) {
                             this.runtime.threadMap.delete(thread.getId());
                         }
+                        // tw: return completed threads to the pool
+                        this.runtime.threadPool.release(thread);
                         doneThreads.push(thread);
                     }
                 }
@@ -385,8 +387,8 @@ class Sequencer {
      * @param {!Thread} thread Thread object to retire.
      */
     retireThread (thread) {
-        thread.stack = [];
-        thread.stackFrame = [];
+        thread.stack.length = 0;
+        thread.stackFrames.length = 0;
         thread.requestScriptGlowInFrame = false;
         thread.status = Thread.STATUS_DONE;
         if (thread.isCompiled) {

@@ -218,6 +218,12 @@ class Thread {
         this.procedures = null;
         this.executableHat = false;
         this.compatibilityStackFrame = null;
+
+        /**
+         * Whether this thread was acquired from a ThreadPool.
+         * @type {boolean}
+         */
+        this._fromPool = false;
     }
 
     /**

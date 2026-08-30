@@ -9,6 +9,7 @@ const BlockType = require('../extension-support/block-type');
 const Profiler = require('./profiler');
 const Sequencer = require('./sequencer');
 const execute = require('./execute.js');
+const ThreadPool = require('./thread-pool');
 const compilerExecute = require('../compiler/jsexecute');
 const {mistsUtils: mistsUtilsCompiler, core: bilupCompiler} = require('../compiler/mists-utils');
 const ScratchBlocksConstants = require('./scratch-blocks-constants');
@@ -350,6 +351,12 @@ class Runtime extends EventEmitter {
          * tw: Responsible for managing the VM's many timers.
          */
         this.frameLoop = new FrameLoop(this);
+
+        /**
+         * tw: Thread pool for reducing GC pressure from frequent thread creation/destruction.
+         * @type {ThreadPool}
+         */
+        this.threadPool = new ThreadPool();
 
         /**
          * Current length of a step.
@@ -2134,7 +2141,7 @@ class Runtime extends EventEmitter {
      * @return {!Thread} The newly created thread.
      */
     _pushThread (id, target, opts) {
-        const thread = new Thread(id);
+        const thread = this.threadPool.acquire(id);
         thread.target = target;
         thread.stackClick = Boolean(opts && opts.stackClick);
         thread.updateMonitor = Boolean(opts && opts.updateMonitor);
@@ -2177,7 +2184,7 @@ class Runtime extends EventEmitter {
      * @return {Thread} The restarted thread.
      */
     _restartThread (thread) {
-        const newThread = new Thread(thread.topBlock);
+        const newThread = this.threadPool.acquire(thread.topBlock);
         newThread.target = thread.target;
         newThread.stackClick = thread.stackClick;
         newThread.updateMonitor = thread.updateMonitor;
@@ -2194,6 +2201,8 @@ class Runtime extends EventEmitter {
         if (i > -1) {
             this.threads[i] = newThread;
             thread.inThreadList = false;
+            // tw: release the old thread back to the pool
+            this.threadPool.release(thread);
             newThread.inThreadList = true;
             return newThread;
         }
@@ -2648,11 +2657,16 @@ class Runtime extends EventEmitter {
         }
         // Remove all remaining threads from executing in the next tick.
         for (let i = 0; i < this.threads.length; i++) {
-            this.threads[i].inThreadList = false;
+            const thread = this.threads[i];
+            thread.inThreadList = false;
+            // tw: return threads to the pool
+            this.threadPool.release(thread);
         }
         this.threads = [];
         this.threadMap.clear();
         this._monitorThreads.clear();
+        // tw: drain the thread pool to free memory when project stops
+        this.threadPool.drain();
 
         this.resetRunId();
     }
@@ -2705,6 +2719,8 @@ class Runtime extends EventEmitter {
                 const thread = this.threads[i];
                 if (thread.isKilled) {
                     thread.inThreadList = false;
+                    // tw: return killed threads to the pool
+                    this.threadPool.release(thread);
                 } else {
                     this.threads[nextThreadIndex] = thread;
                     nextThreadIndex++;
@@ -3121,15 +3137,20 @@ class Runtime extends EventEmitter {
 
     /**
      * Eagerly (re)compile all scripts within this project.
+     * Uses the thread pool to avoid GC pressure from temporary compilation threads.
      */
     precompile () {
+        const that = this;
         this.allScriptsDo((topBlockId, target) => {
             const topBlock = target.blocks.getBlock(topBlockId);
             if (this.getIsHat(topBlock.opcode)) {
-                const thread = new Thread(topBlockId);
+                const thread = this.threadPool.acquire(topBlockId);
                 thread.target = target;
                 thread.blockContainer = target.blocks;
                 thread.tryCompile();
+                // Return the temporary thread to the pool immediately
+                // since it was only used for compilation, not execution.
+                that.threadPool.release(thread);
             }
         });
     }
