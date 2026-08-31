@@ -48,7 +48,12 @@ class ProjectAssetLoad {
 
     prepareReference (assetPromise, prepare) {
         this.preparationTotal++;
-        return this.preparationBarrier
+        // Do not wait for all downloads to complete before starting preparation.
+        // Instead, start preparing each asset as soon as its individual download
+        // finishes. This allows the renderer/audio engine to start creating skins
+        // and decoding sounds while remaining assets are still being downloaded,
+        // significantly reducing perceived load time for large projects.
+        return assetPromise
             .then(() => prepare(assetPromise))
             .finally(() => {
                 this.preparationCompleted++;

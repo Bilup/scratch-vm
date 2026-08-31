@@ -2039,11 +2039,14 @@ const deserialize = async function (json, runtime, zip, isSingleSprite) {
     return fontPromise.then(() => {
         const assets = targetObjects.map(target => parseScratchAssets(target, runtime, zip, assetLoad));
         assetLoad.finishDiscovery();
+        // Start parsing target objects (JSON parsing of blocks, variables, etc.)
+        // immediately without waiting for a tick. Asset download and preparation
+        // promises are already started in parseScratchAssets, and parseScratchObject
+        // will naturally wait for them via Promise.all(costumePromises.concat(soundPromises)).
+        // This overlaps CPU-intensive JSON parsing with asset I/O, reducing total
+        // load time for projects with many sprites or large block counts.
         return assets;
     })
-        // Force this promise to wait for the next loop in the js tick. Let
-        // storage have some time to send off asset requests.
-        .then(assets => Promise.resolve(assets))
         .then(assets => Promise.all(targetObjects
             .map((target, index) =>
                 parseScratchObject(target, runtime, extensions, zip, assets[index]))))
