@@ -291,6 +291,15 @@ class Runtime extends EventEmitter {
         this._hats = {};
 
         /**
+         * Cached array of edge-activated hat opcodes.
+         * Avoids iterating through ALL hat types every frame in _step()
+         * to check whether each one is edge-activated.
+         * @type {Array.<string>}
+         * @private
+         */
+        this._edgeActivatedHats = [];
+
+        /**
          * Map of opcode to information about whether the block's return value should be interpreted
          * for control flow purposes.
          * @type {Record<string, {conditional: boolean}>}
@@ -1078,6 +1087,10 @@ class Runtime extends EventEmitter {
                     for (const hatName in packageHats) {
                         if (Object.prototype.hasOwnProperty.call(packageHats, hatName)) {
                             this._hats[hatName] = packageHats[hatName];
+                            // Maintain the edge-activated cache
+                            if (packageHats[hatName].edgeActivated) {
+                                this._edgeActivatedHats.push(hatName);
+                            }
                         }
                     }
                 }
@@ -1300,6 +1313,10 @@ class Runtime extends EventEmitter {
                             edgeActivated: blockInfo.isEdgeActivated,
                             restartExistingThreads: blockInfo.shouldRestartExistingThreads
                         };
+                        // Maintain the edge-activated cache
+                        if (blockInfo.isEdgeActivated) {
+                            this._edgeActivatedHats.push(opcode);
+                        }
                     } else if (blockInfo.blockType === BlockType.CONDITIONAL) {
                         this._flowing[opcode] = {
                             conditional: true,
@@ -2733,12 +2750,10 @@ class Runtime extends EventEmitter {
         }
 
         // Find all edge-activated hats, and add them to threads to be evaluated.
-        for (const hatType in this._hats) {
-            if (!Object.prototype.hasOwnProperty.call(this._hats, hatType)) continue;
-            const hat = this._hats[hatType];
-            if (hat.edgeActivated) {
-                this.startHats(hatType);
-            }
+        // Uses the cached _edgeActivatedHats array to avoid iterating through ALL
+        // hat types every frame and checking edgeActivated for each one.
+        for (let i = 0; i < this._edgeActivatedHats.length; i++) {
+            this.startHats(this._edgeActivatedHats[i]);
         }
         this.redrawRequested = false;
         this._pushMonitors();
@@ -3493,6 +3508,64 @@ class Runtime extends EventEmitter {
     handleProjectLoaded () {
         this.emit(Runtime.PROJECT_LOADED);
         this.resetRunId();
+
+        // tw: Prewarm the compiler by compiling all scripts in the project.
+        // This moves the compilation cost from "first execution" to "load time",
+        // eliminating the frame drop that occurs when a script is executed for
+        // the first time. The compilation is deferred to the next event loop
+        // tick to avoid blocking the initial render.
+        setTimeout(() => {
+            this._prewarmCompiler();
+        }, 0);
+    }
+
+    /**
+     * Prewarm the compiler by compiling all scripts in all targets.
+     * Compiled results are cached so that first execution of any script
+     * is instant (no compilation delay).
+     * @private
+     */
+    _prewarmCompiler () {
+        if (!this.compilerOptions.enabled) return;
+        if (this.targets.length === 0) return;
+
+        // Lazy import to avoid circular dependency
+        const compile = require('../compiler/compile');
+
+        for (const target of this.targets) {
+            const blocks = target.blocks;
+            if (!blocks) continue;
+
+            const scripts = blocks._scripts;
+            for (let i = 0; i < scripts.length; i++) {
+                const scriptId = scripts[i];
+
+                // Skip if already cached (e.g. from a previous prewarm or runtime execution)
+                if (blocks.getCachedCompileResult(scriptId)) continue;
+
+                // Acquire a thread from the pool for compilation, then release it.
+                // The thread is only used for compilation and never executed.
+                const thread = this.threadPool.acquire();
+                thread.blockContainer = blocks;
+                thread.target = target;
+                thread.pushStack(scriptId);
+                thread.stackClick = false;
+                thread.triedToCompile = true;
+
+                try {
+                    const result = compile(thread);
+                    if (!result.usesGlobalProcedures) {
+                        blocks.cacheCompileResult(scriptId, result);
+                    }
+                } catch (error) {
+                    // Compilation errors are expected for some scripts (e.g., incomplete
+                    // scripts in the editor). Cache the error so we don't retry.
+                    blocks.cacheCompileError(scriptId, error);
+                } finally {
+                    this.threadPool.release(thread);
+                }
+            }
+        }
     }
 
     /**
