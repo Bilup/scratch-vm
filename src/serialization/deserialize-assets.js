@@ -1,24 +1,6 @@
 const JSZip = require('@turbowarp/jszip');
 const log = require('../util/log');
-const AsyncLimiter = require('../util/async-limiter');
-
-// Inflating every asset of a large project at the same time can spike memory
-// usage significantly. JSZip's inflate runs on the single main thread anyway,
-// so limiting concurrency barely affects total load time while keeping peak
-// memory low.
-// We increased from 8 to 16 as modern browsers handle this well, and the
-// I/O overhead of reading zip entries benefits from higher concurrency even
-// if the actual inflate is single-threaded.
-//
-// Considered and rejected: routing these inflates through the platform's
-// DecompressionStream (the trick validate-project.js uses for project.json).
-// Measured here, it is not a win for assets: the Blob + stream plumbing costs
-// more than it saves on entries of this size, and pako's full pipeline came out
-// ahead of raw-native-plus-plumbing at 64KB, 512KB and even 4MB uncompressed.
-// project.json gets away with it because it is one enormous entry, where the
-// fixed cost is amortized and TurboWarp measured the native path several times
-// faster. Assets are many and individually small, so keep them on pako.
-const readZipEntry = new AsyncLimiter(entry => entry.async('uint8array'), 16);
+const {readZipEntry} = require('../util/zip-inflate');
 
 // Standard Scratch asset file names are "<32 hex char md5>.<ext>". When that is
 // the case the md5 in the name is already the content hash, so we can skip
