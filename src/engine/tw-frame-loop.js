@@ -56,7 +56,14 @@ class FrameLoop {
         // 画布内容在某些情况下会丢（GPU 上下文丢失、窗口长时间被遮挡后合成器
         // 丢弃图层）。重新可见时补一次绘制，否则如果是暂停状态、又没有新的逻辑步
         // 触发绘制，就会一直停在空白画面上。
-        if (typeof document !== 'undefined') {
+        //
+        // 注意这里必须连 addEventListener 一起判断，不能只判 `typeof document`：
+        // Node 环境下存在一个没有 addEventListener 的 document 桩，只判前者会在
+        // 构造 Runtime 时直接抛错（headless 运行与 jest 测试都会挂）。
+        if (
+            typeof document !== 'undefined' &&
+            typeof document.addEventListener === 'function'
+        ) {
             document.addEventListener('visibilitychange', () => {
                 if (!document.hidden) {
                     this._pendingDraw = true;
