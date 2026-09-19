@@ -165,6 +165,9 @@ class FontManager extends EventEmitter {
         if (!this.isValidCustomFont(family)) {
             throw new Error('Invalid custom font family');
         }
+        if (!asset) {
+            return;
+        }
         addOrUpdateFont(this.fonts, {
             system: false,
             family,
@@ -215,7 +218,7 @@ class FontManager extends EventEmitter {
 
         const fontfaces = {};
         for (const font of this.fonts) {
-            if (!font.system) {
+            if (!font.system && font.asset) {
                 const uri = font.asset.encodeDataURI();
                 const fontface = `@font-face { font-family: "${font.family}"; src: url("${uri}"); }`;
                 const family = `"${font.family}", ${font.fallback}`;
@@ -229,11 +232,8 @@ class FontManager extends EventEmitter {
      * Get data to save in project.json and sb3 files.
      */
     serializeJSON () {
-        if (this.fonts.length === 0) {
-            return null;
-        }
-
-        return this.fonts.map(font => {
+        const fonts = [];
+        for (const font of this.fonts) {
             const serialized = {
                 system: font.system,
                 family: font.family,
@@ -242,19 +242,34 @@ class FontManager extends EventEmitter {
 
             if (!font.system) {
                 const asset = font.asset;
+                if (!asset) {
+                    // Nothing was ever loaded for this font, so there is no
+                    // md5ext to reference. Writing the entry anyway would save a
+                    // reference to an asset that does not exist (and reading
+                    // asset.assetId without this guard threw instead).
+                    log.warn(`Not saving the custom font "${font.family}"; its data was never loaded.`);
+                    continue;
+                }
                 serialized.md5ext = `${asset.assetId}.${asset.dataFormat}`;
             }
 
-            return serialized;
-        });
+            fonts.push(serialized);
+        }
+
+        if (fonts.length === 0) {
+            return null;
+        }
+        return fonts;
     }
 
     /**
      * @returns {Asset[]} list of scratch-storage assets
      */
     serializeAssets () {
+        // Only fonts that actually have data can go into an sb3; a null entry
+        // would break the caller while it reads asset.assetId.
         return this.fonts
-            .filter(i => !i.system)
+            .filter(i => !i.system && i.asset)
             .map(i => i.asset);
     }
 
@@ -313,7 +328,16 @@ class FontManager extends EventEmitter {
 
             if (system) {
                 seenFamilies.add(family);
-                this.addSystemFont(family, fallback);
+                // addSystemFont() rejects families the renderer cannot take
+                // (e.g. "Arial, sans-serif" in an older or hand-edited project).
+                // This call used to sit inside the loop's try/catch; without it a
+                // single bad family rejects the whole load and the project cannot
+                // be opened at all, so the failure stays isolated to this font.
+                try {
+                    this.addSystemFont(family, fallback);
+                } catch (e) {
+                    log.error('could not add system font', e);
+                }
                 continue;
             }
 
