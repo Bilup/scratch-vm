@@ -100,8 +100,16 @@ class ProjectAssetLoad {
         const overallCompleted = this.downloadCompleted + this.preparationCompleted;
         const completed = phase === 'download' ? this.downloadCompleted : this.preparationCompleted;
         const total = phase === 'download' ? downloadTotal : this.preparationTotal;
-        this.runtime.finishedAssetRequests = overallCompleted;
-        this.runtime.totalAssetRequests = overallTotal;
+        // finishedAssetRequests/totalAssetRequests are what loading UIs print as
+        // "loading assets… (x of y)", so they must count *assets* -- one per
+        // unique file. Reporting work units here (downloads + reference
+        // preparations) made every project whose assets are each referenced once
+        // announce exactly twice as many assets as it actually has, and projects
+        // that share one file across many references announced a number that
+        // matched nothing at all. Work-unit numbers remain available to callers
+        // through the detail payload below.
+        this.runtime.finishedAssetRequests = this.downloadCompleted;
+        this.runtime.totalAssetRequests = downloadTotal;
         this.runtime.emitAssetProgress({
             phase,
             completed,
