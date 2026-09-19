@@ -48,12 +48,16 @@ class ProjectAssetLoad {
 
     prepareReference (assetPromise, prepare) {
         this.preparationTotal++;
-        // Do not wait for all downloads to complete before starting preparation.
-        // Instead, start preparing each asset as soon as its individual download
-        // finishes. This allows the renderer/audio engine to start creating skins
-        // and decoding sounds while remaining assets are still being downloaded,
-        // significantly reducing perceived load time for large projects.
+        // Start preparing each asset as soon as its own download has settled
+        // instead of waiting for all of them, which is where the load time goes
+        // on large projects. A *failed* download, though, belongs to prepare():
+        // it is handed the original promise, and loadCostume()/loadSound() turn a
+        // missing asset into a `broken` costume/sound. Chaining straight off
+        // assetPromise propagated the rejection into parseScratchObject's
+        // Promise.all instead, so a single 404 rejected the whole load and the
+        // project could not be opened at all.
         return assetPromise
+            .catch(() => null)
             .then(() => prepare(assetPromise))
             .finally(() => {
                 this.preparationCompleted++;
