@@ -36,10 +36,7 @@ const base = {
             test: /\.(js|mjs)$/,
             loader: 'babel-loader',
             include: [
-                path.resolve(__dirname, 'src'),
-                // rotur-sdk 的 dist/index.mjs 使用了 class fields 语法，
-                // webpack 4 无法直接解析，需要交给 babel 转译
-                path.resolve(__dirname, 'node_modules', 'rotur-sdk')
+                path.resolve(__dirname, 'src')
             ],
             query: {
                 presets: [['@babel/preset-env']]
