@@ -1,5 +1,19 @@
 const StringUtil = require('../util/string-util');
 const log = require('../util/log');
+const AsyncLimiter = require('../util/async-limiter');
+
+/**
+ * decodeAudioData itself runs off the main thread, but handing the audio decoder
+ * every sound of a project at once still saturates it, and audio decoding is the
+ * slowest part of loading a sound-heavy project. Bound how many are in flight.
+ * @const {number}
+ */
+const MAX_CONCURRENT_SOUND_DECODES = 8;
+
+const decodeSoundBuffer = new AsyncLimiter(
+    (audioEngine, soundData) => audioEngine.decodeSoundBuffer(soundData),
+    MAX_CONCURRENT_SOUND_DECODES
+);
 
 /**
  * Initialize a sound from an asset asynchronously.
@@ -29,7 +43,7 @@ const loadSoundFromAsset = function (sound, soundAsset, runtime, soundBank, asse
             soundAsset.assetType,
             soundAsset.assetId,
             soundAsset.dataFormat,
-            () => runtime.audioEngine.decodeSoundBuffer(soundData)
+            () => decodeSoundBuffer.do(runtime.audioEngine, soundData)
         ).then(buffer => runtime.audioEngine.createSoundPlayer(buffer));
     } else {
         soundPlayerPromise = runtime.audioEngine.decodeSoundPlayer(soundData);
