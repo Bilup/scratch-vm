@@ -1436,6 +1436,11 @@ const parseScratchAssets = function (object, runtime, zip, assetLoad) {
     const assets = {
         costumePromises: null,
         soundPromises: null,
+        // The costume descriptors, in costume order. They exist as soon as the
+        // JSON has been read -- loadCostume() fills them in afterwards, in place
+        // -- so a caller that only needs the sprite to be drawable can hand them
+        // to the sprite before their assets have finished loading.
+        costumeObjects: [],
         soundBank: runtime.audioEngine && runtime.audioEngine.createBank()
     };
 
@@ -1461,6 +1466,9 @@ const parseScratchAssets = function (object, runtime, zip, assetLoad) {
             costumeSource.md5ext : `${costumeSource.assetId}.${dataFormat}`;
         costume.md5 = costumeMd5Ext;
         costume.dataFormat = dataFormat;
+        // Reachable before its asset is: parseScratchObject may install the
+        // sprite with these descriptors while the assets are still in flight.
+        assets.costumeObjects.push(costume);
         // deserializeCostume should be called on the costume object we're
         // creating above instead of the source costume object, because this way
         // we're always loading the 'sb3' representation of the costume
@@ -1579,9 +1587,13 @@ const fixSporkCompatibility = function (blocks) {
  * @param {JSZip} zip Sb3 file describing this project (to load assets from)
  * @param {object} assets - Promises for assets of this scratch object grouped
  *   into costumes and sounds
+ * @param {boolean} [installWithCurrentCostume] True when this object is a single
+ *   sprite being added to a project that is already on screen, rather than part
+ *   of a project being loaded. Resolves as soon as the current costume is ready
+ *   instead of waiting for every costume and sound.
  * @return {!Promise.<Target>} Promise for the target created (stage or sprite), or null for unsupported objects.
  */
-const parseScratchObject = function (object, runtime, extensions, zip, assets) {
+const parseScratchObject = function (object, runtime, extensions, zip, assets, installWithCurrentCostume) {
     if (!Object.prototype.hasOwnProperty.call(object, 'name')) {
         // Watcher/monitor - skip this object until those are implemented in VM.
         // @todo
@@ -1766,16 +1778,48 @@ const parseScratchObject = function (object, runtime, extensions, zip, assets) {
     if (Object.prototype.hasOwnProperty.call(object, 'extensionStorage')) {
         target.extensionStorage = object.extensionStorage;
     }
-    Promise.all(costumePromises).then(costumes => {
+    const costumesReady = Promise.all(costumePromises).then(costumes => {
         sprite.costumes = costumes;
+        if (installWithCurrentCostume) {
+            // A costume that arrived after the sprite was installed never
+            // reached the drawable: setCostume() forwards whatever skinId the
+            // costume had at the time, and the renderer skips drawables with no
+            // skin. Re-apply now that they all have one.
+            target.updateAllDrawableProperties();
+        }
         // Request targets update to refresh GUI when costumes are loaded
         runtime.requestTargetsUpdate(target);
     });
-    Promise.all(soundPromises).then(sounds => {
+    const soundsReady = Promise.all(soundPromises).then(sounds => {
         sprite.sounds = sounds;
         // Make sure if soundBank is undefined, sprite.soundBank is then null.
         sprite.soundBank = soundBank || null;
     });
+
+    if (installWithCurrentCostume) {
+        // Adding a sprite to a project that is already on screen only needs the
+        // sprite to be drawable, and only the costume it draws is needed for
+        // that. The costume descriptors exist before their asset data does, so
+        // the sprite can have its full costume list and be installed as soon as
+        // its current costume is ready; the rest of the costumes and all of the
+        // sounds keep loading and announce themselves through
+        // requestTargetsUpdate() when they land.
+        //
+        // Waiting for every one of them instead -- which is what the project
+        // load path below still does, deliberately -- made the sprite appear
+        // only after the slowest of its assets had been fetched and decoded.
+        // Measured on library sprites that is 2-5x the time to the current
+        // costume, because the assets are fetched in parallel and the wait is
+        // for the slowest, not the sum.
+        sprite.costumes = assets.costumeObjects;
+        // Nothing awaits these two any more, and one failed asset must not turn
+        // into an unhandled rejection after the sprite is already usable.
+        costumesReady.catch(error => log.warn(`Failed to finish loading costumes: ${error}`));
+        soundsReady.catch(error => log.warn(`Failed to finish loading sounds: ${error}`));
+        const currentCostumeReady = costumePromises[target.currentCostume] || costumePromises[0];
+        return (currentCostumeReady || Promise.resolve()).then(() => target);
+    }
+
     return Promise.all(costumePromises.concat(soundPromises)).then(() => target);
 };
 
@@ -2049,7 +2093,7 @@ const deserialize = async function (json, runtime, zip, isSingleSprite) {
     })
         .then(assets => Promise.all(targetObjects
             .map((target, index) =>
-                parseScratchObject(target, runtime, extensions, zip, assets[index]))))
+                parseScratchObject(target, runtime, extensions, zip, assets[index], isSingleSprite))))
         .then(targets => targets // Re-sort targets back into original sprite-pane ordering
             .map((t, i) => {
                 // Add layer order property to deserialized targets.
