@@ -2449,6 +2449,19 @@ class Runtime extends EventEmitter {
         });
 
         this.targets.slice().forEach(this.disposeTarget, this);
+        // Every project load funnels through here -- VirtualMachine.deserializeProject()
+        // calls clear(), which calls dispose() -- so this is the one point where the
+        // outgoing project's skins are known to be unreachable and safe to hand back.
+        //
+        // It has to happen after the targets are gone (so that skins still used by a
+        // surviving drawable -- the pen layer, the video preview -- are correctly left
+        // alone) and before the incoming project starts creating its own. Without it a
+        // costume's texture and its equally large silhouette buffer survive the load,
+        // so opening project B after project A costs A + B and a third load costs
+        // A + B + C. On Android that is what drives the WebView renderer into an OOM.
+        if (this.renderer && typeof this.renderer.releaseUnattachedSkins === 'function') {
+            this.renderer.releaseUnattachedSkins();
+        }
         this.extensionStorage = {};
         // tw: explicitly emit a MONITORS_UPDATE instead of relying on implicit behavior of _step()
         if (!this._monitorState.empty()) {

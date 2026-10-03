@@ -172,7 +172,14 @@ const _persistentReadImage = async asset => {
 };
 
 // Browsers break when we do too many createImageBitmap at the same time.
-const MAX_CONCURRENT_IMAGE_DECODES = 50;
+// The limit is also the peak cost of loading a project: every slot can be
+// holding a fully decoded bitmap (a 4000x3000 photo is ~48MB), and the decode
+// pipelines ahead of the code that consumes the result. At 50 that peak alone
+// can exhaust the WebView renderer's budget on Android before a single texture
+// is uploaded. 12 keeps the decoders busy without allowing a project full of
+// large costumes to balloon; raise it if desktop load time matters more than
+// peak memory.
+const MAX_CONCURRENT_IMAGE_DECODES = 12;
 const readImage = new AsyncLimiter(_persistentReadImage, MAX_CONCURRENT_IMAGE_DECODES);
 
 /**
