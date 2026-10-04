@@ -452,8 +452,7 @@ class RenderedTarget extends Target {
             index, 0, this.sprite.costumes.length - 1
         );
         if (this.renderer) {
-            const costume = this.sprite.costumes[this.currentCostume];
-            this.renderer.updateDrawableSkinId(this.drawableID, costume.skinId);
+            this._updateDrawableSkinId();
 
             if (this.visible) {
                 this.emitVisualChange();
@@ -687,8 +686,7 @@ class RenderedTarget extends Target {
             this.renderer.updateDrawableDirectionScale(this.drawableID, direction, scale);
             this.renderer.updateDrawableVisible(this.drawableID, this.visible);
 
-            const costume = this.getCostumes()[this.currentCostume];
-            this.renderer.updateDrawableSkinId(this.drawableID, costume.skinId);
+            this._updateDrawableSkinId();
 
             for (const effectName in this.effects) {
                 if (!Object.prototype.hasOwnProperty.call(this.effects, effectName)) continue;
@@ -701,6 +699,28 @@ class RenderedTarget extends Target {
             }
         }
         this.runtime.requestTargetsUpdate(this);
+    }
+
+    /**
+     * Give the renderer this target's current costume, if that costume has a
+     * skin to give.
+     *
+     * `costume.skinId` is only a skin id in some of the states it can be read
+     * in: it is null while a costume's asset is still loading (the single-sprite
+     * install path hands the sprite its costumes before their assets land) and
+     * -1 after a costume fails to load. Passing either on to the renderer used
+     * to wipe the drawable's skin -- updateDrawableSkinId() looked the id up and
+     * stored the resulting undefined -- which left the drawable un-fenceable and
+     * turned the next "go to x y" into an exception thrown out of Runtime._step.
+     * A drawable that has nothing new to show is better off keeping the skin it
+     * already has.
+     */
+    _updateDrawableSkinId () {
+        const costume = this.getCostumes()[this.currentCostume];
+        if (!costume) return;
+        const skinId = costume.skinId;
+        if (typeof skinId !== 'number' || skinId < 0) return;
+        this.renderer.updateDrawableSkinId(this.drawableID, skinId);
     }
 
     /**
