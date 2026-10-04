@@ -126,7 +126,14 @@ const handlePromiseResolution = (resolvedValue, sequencer, thread, blockCached, 
             if (popped === null) {
                 return;
             }
-            nextBlockId = thread.getBlocksForId(popped).getNextBlock(popped);
+            const blocks = thread.getBlocksForId(popped);
+            // The thread may have been killed and returned to the pool while the
+            // promise was in flight, which clears its blockContainer. Nothing is
+            // left to advance, so leave the stack alone rather than throwing.
+            if (!blocks) {
+                return;
+            }
+            nextBlockId = blocks.getNextBlock(popped);
             if (nextBlockId !== null) {
                 // A next block exists so break out this loop
                 break;

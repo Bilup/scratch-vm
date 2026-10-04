@@ -445,7 +445,16 @@ class Thread {
      * where execution proceeds from one block to the next.
      */
     goToNextBlock () {
-        const nextBlockId = this.getBlocksForId(this.peekStack()).getNextBlock(this.peekStack());
+        const blocks = this.getBlocksForId(this.peekStack());
+        // A thread that has been returned to the pool and reset (blockContainer
+        // is null) can still be reached by a promise continuation that was
+        // scheduled before it was released. There is no script left to advance,
+        // so stop here instead of dereferencing null.
+        if (!blocks) {
+            this.stack.length = 0;
+            return;
+        }
+        const nextBlockId = blocks.getNextBlock(this.peekStack());
         this.reuseStackForNextBlock(nextBlockId);
     }
 
