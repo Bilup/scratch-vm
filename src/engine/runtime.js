@@ -2306,8 +2306,14 @@ class Runtime extends EventEmitter {
         // The cached Thread may have been returned to the thread pool and reset
         // (status back to RUNNING, updateMonitor/inThreadList cleared), so only
         // treat it as a live monitor thread when it is still an active monitor.
+        // It also has to still be *this* script's monitor: a recycled Thread can
+        // have been handed out again as some other script's monitor thread, and
+        // that one then looks like a live entry for every key it is stored under.
+        // Nothing else ever removes a stale entry from this map, so skipping here
+        // would leave the monitor of `topBlockId` permanently unstarted.
         const existingThread = this._monitorThreads.get(topBlockId);
-        if (existingThread && existingThread.updateMonitor && existingThread.inThreadList &&
+        if (existingThread && existingThread.topBlock === topBlockId &&
+            existingThread.updateMonitor && existingThread.inThreadList &&
             existingThread.status !== Thread.STATUS_DONE && !existingThread.isKilled) {
             return;
         }
@@ -3549,7 +3555,21 @@ class Runtime extends EventEmitter {
 
                 // Acquire a thread from the pool for compilation, then release it.
                 // The thread is only used for compilation and never executed.
-                const thread = this.threadPool.acquire();
+                //
+                // The script's block id has to be passed to acquire(): the IR
+                // generator takes its entry point from `thread.topBlock`
+                // (irgen.js: `generateScriptTree(generator, this.thread.topBlock)`),
+                // and pushStack() does not set it. Calling acquire() with no
+                // argument left topBlock undefined, so every prewarm compile
+                // threw "Cannot find top block" -- and the catch below then wrote
+                // that failure into the compile cache as `{success: false}`, which
+                // is exactly the entry tryCompile() uses to decide *not* to
+                // compile. One project load therefore disabled the compiler for
+                // every script it had not already compiled, which is every script
+                // that had not run yet in the first frame: receiving blocks,
+                // backdrop/key hats and procedure definitions all silently fell
+                // back to the interpreter from then on.
+                const thread = this.threadPool.acquire(scriptId);
                 thread.blockContainer = blocks;
                 thread.target = target;
                 thread.pushStack(scriptId);
