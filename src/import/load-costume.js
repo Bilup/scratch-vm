@@ -4,6 +4,42 @@ const AsyncLimiter = require('../util/async-limiter');
 const {loadSvgString, serializeSvgToString} = require('@bilup/scratch-svg-renderer');
 const {parseVectorMetadata} = require('../serialization/tw-costume-import-export');
 
+let _TextEncoder;
+if (typeof TextEncoder === 'undefined') {
+    _TextEncoder = require('text-encoding').TextEncoder;
+} else {
+    _TextEncoder = TextEncoder;
+}
+
+/**
+ * Keep a costume's asset identity (`assetId`, `dataFormat`, `md5`) in sync with
+ * the asset it actually holds.
+ *
+ * `md5` is what gets written to project.json, and the zip entry that carries the
+ * costume's bytes is named after the asset: if the two disagree the project is
+ * saved referring to a file that does not exist (or, worse, to a different
+ * asset that happens to own that id). Disagreement is easy to reach -- a
+ * costume declared `.jpg` whose data was served as `.jpeg`, a costume that had
+ * to fall back to the default asset, or one whose JSON md5ext was rewritten by
+ * another tool -- so the asset, not the declared metadata, is treated as the
+ * source of truth.
+ * @param {!object} costume The costume to update in place.
+ * @returns {!object} The same costume.
+ */
+const syncCostumeAssetIdentity = function (costume) {
+    if (!costume.asset) return costume;
+    if (costume.asset.assetId) {
+        costume.assetId = costume.asset.assetId;
+    }
+    if (typeof costume.asset.dataFormat === 'string' && costume.asset.dataFormat) {
+        costume.dataFormat = costume.asset.dataFormat;
+    }
+    if (costume.assetId && costume.dataFormat) {
+        costume.md5 = `${costume.assetId}.${costume.dataFormat}`;
+    }
+    return costume;
+};
+
 const loadVector_ = function (costume, runtime, rotationCenter, optVersion) {
     return new Promise(resolve => {
         if (!runtime.renderer) {
@@ -43,9 +79,27 @@ const loadVector_ = function (costume, runtime, rotationCenter, optVersion) {
             if (svgString !== fixedSvgString) {
                 svgString = fixedSvgString;
                 const storage = runtime.storage;
-                costume.asset.encodeTextData(fixedSvgString, storage.DataFormat.SVG, true);
-                costume.assetId = costume.asset.assetId;
-                costume.md5 = `${costume.assetId}.${costume.dataFormat}`;
+                if (storage) {
+                    // Store the fixed SVG as a new asset instead of re-encoding
+                    // the one we are holding. That asset is shared: storage
+                    // hands out one instance per id, and the zip cache in
+                    // deserialize-assets.js does the same, so every costume
+                    // that references this file is looking at the same object.
+                    // encodeTextData() would rewrite the id under all of them,
+                    // leaving the other costumes pointing at the id the asset
+                    // used to have -- a file that is not in the project any
+                    // more once it is saved.
+                    costume.asset = storage.createAsset(
+                        storage.AssetType.ImageVector,
+                        storage.DataFormat.SVG,
+                        new _TextEncoder().encode(fixedSvgString),
+                        null,
+                        true // generate md5
+                    );
+                    costume.dataFormat = costume.asset.dataFormat;
+                    costume.assetId = costume.asset.assetId;
+                    costume.md5 = `${costume.assetId}.${costume.dataFormat}`;
+                }
             }
         }
 
@@ -376,11 +430,16 @@ const loadBitmap_ = function (costume, runtime, _rotationCenter, assetLoad) {
 const handleCostumeLoadError = function (costume, runtime, assetLoad) {
     // Keep track of the old asset information until we're done loading the default costume
     const oldAsset = costume.asset; // could be null
-    const oldAssetId = costume.assetId;
+    // The asset, when we have one, is what serialize-assets.js will write to the
+    // zip -- so it, not the metadata derived from the project's md5ext, has to
+    // be what `broken` records. Otherwise a costume whose declared format and
+    // served format differed is saved as a reference to a file that is not
+    // there.
+    const oldAssetId = (oldAsset && oldAsset.assetId) || costume.assetId;
     const oldRotationX = costume.rotationCenterX;
     const oldRotationY = costume.rotationCenterY;
     const oldBitmapResolution = costume.bitmapResolution;
-    const oldDataFormat = costume.dataFormat;
+    const oldDataFormat = (oldAsset && oldAsset.dataFormat) || costume.dataFormat;
 
     const AssetType = runtime.storage.AssetType;
     const isVector = costume.dataFormat === AssetType.ImageVector.runtimeFormat;
@@ -390,15 +449,23 @@ const handleCostumeLoadError = function (costume, runtime, assetLoad) {
         runtime.storage.defaultAssetId.ImageVector :
         runtime.storage.defaultAssetId.ImageBitmap;
     costume.asset = runtime.storage.get(costume.assetId);
-    costume.md5 = `${costume.assetId}.${costume.asset.dataFormat}`;
+    // Take the format from the default asset too: leaving the original format
+    // on a costume that now holds a different image made `md5` and `dataFormat`
+    // describe a file that was never written.
+    syncCostumeAssetIdentity(costume);
 
-    const defaultCostumePromise = (isVector) ?
-        loadVector_(costume, runtime) : loadBitmap_(costume, runtime, null, assetLoad);
+    // Even the default asset can be missing: there is then nothing to draw, but
+    // a broken costume must still come back so the rest of the project loads.
+    const defaultCostumePromise = costume.asset ?
+        (isVector ? loadVector_(costume, runtime) : loadBitmap_(costume, runtime, null, assetLoad)) :
+        Promise.resolve(costume);
 
     return defaultCostumePromise.then(loadedCostume => {
         loadedCostume.broken = {};
         loadedCostume.broken.assetId = oldAssetId;
-        loadedCostume.broken.md5 = `${oldAssetId}.${oldDataFormat}`;
+        if (oldAssetId && oldDataFormat) {
+            loadedCostume.broken.md5 = `${oldAssetId}.${oldDataFormat}`;
+        }
 
         // Should be null if we got here because the costume was missing
         loadedCostume.broken.asset = oldAsset;
@@ -427,7 +494,14 @@ const handleCostumeLoadError = function (costume, runtime, assetLoad) {
  * @returns {?Promise} - a promise which will resolve after skinId is set, or null on error.
  */
 const loadCostumeFromAsset = function (costume, runtime, optVersion, assetLoad) {
-    costume.assetId = costume.asset.assetId;
+    if (!costume.asset) {
+        // Nothing to build a skin from. A packaged runtime drops asset data
+        // once the skin exists, and duplicating a costume built that way only
+        // has the skin to work with -- keep the costume exactly as it is
+        // instead of dereferencing the missing asset.
+        return Promise.resolve(costume);
+    }
+    syncCostumeAssetIdentity(costume);
     const renderer = runtime.renderer;
     if (!renderer) {
         log.warn('No rendering module present; cannot load costume: ', costume.name);
@@ -474,10 +548,15 @@ const loadCostumeFromAsset = function (costume, runtime, optVersion, assetLoad) 
  * @returns {?Promise} - a promise which will resolve after skinId is set, or null on error.
  */
 const loadCostume = function (md5ext, costume, runtime, optVersion, assetPromise, assetLoad) {
-    const idParts = StringUtil.splitFirst(md5ext, '.');
+    // A costume reference that is not a well-formed md5ext is a broken costume,
+    // not a reason to throw: parsing used to crash on the missing extension and
+    // take the whole project down with it.
+    const idParts = StringUtil.splitFirst(typeof md5ext === 'string' ? md5ext : '', '.');
     const md5 = idParts[0];
-    const ext = idParts[1].toLowerCase();
-    costume.dataFormat = ext;
+    const ext = (idParts[1] || costume.dataFormat || '').toLowerCase();
+    if (ext) {
+        costume.dataFormat = ext;
+    }
 
     if (costume.asset && !assetPromise) {
         // Costume comes with asset. It could be coming from image upload, drag and drop, or file.

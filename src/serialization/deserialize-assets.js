@@ -2,15 +2,18 @@ const JSZip = require('@turbowarp/jszip');
 const log = require('../util/log');
 const {readZipEntry} = require('../util/zip-inflate');
 
-// Standard Scratch asset file names are "<32 hex char md5>.<ext>". When that is
-// the case the md5 in the name is already the content hash, so we can skip
-// recomputing the md5 over the (potentially large) asset data.
-const MD5_REGEX = /^[0-9a-f]{32}$/i;
-const getKnownMd5 = fileName => {
-    const dot = fileName.indexOf('.');
-    const prefix = dot === -1 ? fileName : fileName.substring(0, dot);
-    return MD5_REGEX.test(prefix) ? prefix : null;
-};
+// Every asset is stored under the md5 of its *content*, even though standard
+// Scratch file names are already "<md5>.<ext>".
+//
+// Trusting the name was tried and reverted: it made loading cheaper, but a zip
+// entry whose name does not match its bytes then produced an asset whose id
+// lies about its contents. Those ids are what the rest of the world keys on:
+// storage caches, the asset host, and project.json - so two costumes that
+// carried the same name but different bytes collapsed onto whichever one was
+// created first (the wrong image), and a costume that failed to decode was
+// recorded as `broken` under an id that no longer described the data we kept
+// for it. Content hashing costs one pass over the asset data, which
+// createAssetOnce() amortizes over every reference to the same file.
 
 // A single asset can be referenced by several sprites. JSZip otherwise
 // inflates it, hashes it, and creates the same storage asset once per reference.
@@ -31,10 +34,12 @@ const createAssetOnce = function (file, storage, assetType, dataFormat, assetId,
         byFile.set(file, byType);
     }
     const assetTypeName = assetType && assetType.name ? assetType.name : String(assetType);
-    const key = `${assetTypeName}\0${dataFormat}\0${assetId || ''}\0${generateId ? '1' : '0'}`;
+    const key = `${assetTypeName}\0${String(dataFormat).toLowerCase()}\0${assetId || ''}\0${generateId ? '1' : '0'}`;
     let promise = byType.get(key);
     if (!promise) {
-        promise = file.async('uint8array')
+        // Read through the shared zip reader, not file.async(): this is the same
+        // limiter and size-gated routing that the rest of the load uses.
+        promise = readZipEntry.do(file)
             .then(data => storage.createAsset(assetType, dataFormat, data, assetId, generateId));
         byType.set(key, promise);
         promise.catch(() => {
@@ -93,16 +98,17 @@ const deserializeSound = function (sound, runtime, zip, assetFileName) {
     } else if (requestedFormat === 'ogg') {
         dataFormat = storage.DataFormat.OGG || 'ogg';
     }
-    // The file name prefix is the content md5 for standard assets, so we can
-    // skip recomputing the md5 over the sound data.
-    const knownMd5 = getKnownMd5(fileName);
-    return readZipEntry.do(soundFile).then(data => storage.createAsset(
+    // Never take the id from the file name: see the note at the top of this
+    // file. The content decides the id, so a reference can never be answered
+    // with another asset's bytes.
+    return createAssetOnce(
+        soundFile,
+        storage,
         storage.AssetType.Sound,
         dataFormat,
-        data,
-        knownMd5,
-        !knownMd5
-    ))
+        null,
+        true // generate id from the data
+    )
         .then(asset => {
             sound.asset = asset;
             sound.assetId = asset.assetId;
@@ -218,19 +224,18 @@ const deserializeCostume = function (costume, runtime, zip, assetFileName, textL
         textLayerFilePromise = Promise.resolve(null);
     }
 
-    // The file name prefix is the content md5 for standard assets, so we can
-    // skip recomputing the md5 over the image data.
-    const knownMd5 = getKnownMd5(fileName);
+    // Look back at the note at the top of this file: the content names the
+    // asset, never the zip entry.
     return Promise.all([textLayerFilePromise,
-        readZipEntry.do(costumeFile)
-            .then(data => storage.createAsset(
-                assetType,
-                // TODO eventually we want to map non-png's to their actual file types?
-                costumeFormat,
-                data,
-                knownMd5,
-                !knownMd5
-            ))
+        createAssetOnce(
+            costumeFile,
+            storage,
+            assetType,
+            // TODO eventually we want to map non-png's to their actual file types?
+            costumeFormat,
+            null,
+            true // generate id from the data
+        )
             .then(asset => {
                 costume.asset = asset;
                 costume.assetId = asset.assetId;
