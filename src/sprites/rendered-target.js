@@ -442,6 +442,15 @@ class RenderedTarget extends Target {
      * @param {number} index New index of costume.
      */
     setCostume (index) {
+        // A target can legitimately have no costumes: a costume-less .sprite3,
+        // or one whose costumes were all stripped. wrapClamp(index, 0, -1)
+        // divides by a zero-length range and returns NaN, and the drawable then
+        // looked up `costumes[NaN].skinId` and threw -- which, during project
+        // install, rejected the load of every other target too.
+        if (this.sprite.costumes.length === 0) {
+            this.runtime.requestTargetsUpdate(this);
+            return;
+        }
         // Keep the costume index within possible values.
         index = Math.round(index);
         if (index === Infinity || index === -Infinity || !index) {

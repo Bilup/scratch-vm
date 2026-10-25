@@ -11,13 +11,23 @@
 const serializeAssets = function (runtime, assetType, optTargetId) {
     const targets = optTargetId ? [runtime.getTargetById(optTargetId)] : runtime.targets;
     const assetDescs = [];
+    // Clones share their sprite's costume and sound lists. Walking targets
+    // wrote every asset of a cloned sprite once per clone -- same name, same
+    // bytes -- so visit each sprite once.
+    const seenSprites = new Set();
     for (let i = 0; i < targets.length; i++) {
         const currTarget = targets[i];
-        const currAssets = currTarget.sprite[assetType];
+        const sprite = currTarget && currTarget.sprite;
+        if (!sprite || seenSprites.has(sprite)) continue;
+        seenSprites.add(sprite);
+        const currAssets = sprite[assetType] || [];
         for (let j = 0; j < currAssets.length; j++) {
             const currAsset = currAssets[j];
             const asset = currAsset.broken ? currAsset.broken.asset : currAsset.asset;
-            if (asset) {
+            // A reference without an id cannot name a file; naming it
+            // "undefined.png" would make the zip carry an asset that no
+            // costume points at.
+            if (asset && asset.assetId) {
                 // Serialize asset if it exists, otherwise skip
                 assetDescs.push({
                     fileName: `${asset.assetId}.${asset.dataFormat}`,

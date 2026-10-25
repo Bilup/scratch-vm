@@ -1445,7 +1445,7 @@ const parseScratchAssets = function (object, runtime, zip, assetLoad) {
     };
 
     // Costumes from JSON.
-    assets.costumePromises = (object.costumes || []).map((costumeSource, referenceIndex) => {
+    assets.costumePromises = (object.costumes || []).map(costumeSource => {
         // @todo: Make sure all the relevant metadata is being pulled out.
         const costume = {
             // costumeSource only has an asset if an image is being uploaded as
@@ -1462,8 +1462,19 @@ const parseScratchAssets = function (object, runtime, zip, assetLoad) {
             costumeSource.dataFormat ||
             (costumeSource.assetType && costumeSource.assetType.runtimeFormat) || // older format
             'png'; // if all else fails, guess that it might be a PNG
-        const costumeMd5Ext = Object.prototype.hasOwnProperty.call(costumeSource, 'md5ext') ?
-            costumeSource.md5ext : `${costumeSource.assetId}.${dataFormat}`;
+        // The costume's file name is the only thing that identifies its asset.
+        // `assetId` alone is not enough: projects rewritten by third-party tools
+        // routinely carry an assetId that no longer matches md5ext, and merging
+        // two such references made the second costume draw the first one's
+        // image. Fall back to assetId + format for older files that predate
+        // md5ext, and to '' when the JSON gives neither -- '' opts this
+        // reference out of the shared cache instead of inventing a key.
+        let costumeMd5Ext = costumeSource.md5ext;
+        if (typeof costumeMd5Ext !== 'string' || !costumeMd5Ext) {
+            costumeMd5Ext = typeof costumeSource.assetId === 'string' && costumeSource.assetId ?
+                `${costumeSource.assetId}.${dataFormat}` :
+                '';
+        }
         costume.md5 = costumeMd5Ext;
         costume.dataFormat = dataFormat;
         // Reachable before its asset is: parseScratchObject may install the
@@ -1477,15 +1488,27 @@ const parseScratchAssets = function (object, runtime, zip, assetLoad) {
         const storage = runtime.storage;
         const assetType = storage && dataFormat.toLowerCase() === 'svg' ?
             storage.AssetType.ImageVector : storage && storage.AssetType.ImageBitmap;
-        const assetId = costumeSource.assetId || StringUtil.splitFirst(costumeMd5Ext, '.')[0] ||
-            `embedded:${object.name}:${referenceIndex}`;
-        const assetPromise = assetLoad.loadAsset(assetType || 'costume', assetId, dataFormat, () => {
-            const descriptor = Object.assign({}, costume);
-            return deserializeCostume(descriptor, runtime, zip).then(() => {
-                if (descriptor.asset || !storage) return descriptor.asset || null;
-                return storage.load(assetType, assetId, dataFormat.toLowerCase());
+        // The md5ext prefix is the asset's real id: it is the name of the zip
+        // entry and the key the asset host is asked for. `assetId` from the
+        // JSON is only a fallback for files old enough not to carry md5ext.
+        const md5 = costumeMd5Ext ? StringUtil.splitFirst(costumeMd5Ext, '.')[0] : '';
+        const assetId = md5 ||
+            (typeof costumeSource.assetId === 'string' && costumeSource.assetId ?
+                costumeSource.assetId : '');
+        const assetPromise = assetLoad.loadAsset(
+            assetType || 'costume',
+            ProjectAssetLoad.identity(costumeMd5Ext, assetId, dataFormat),
+            () => {
+                const descriptor = Object.assign({}, costume);
+                // Resolve the file by the same name that identified the cache
+                // entry, so a shared entry can never be filled with another
+                // reference's bytes.
+                return deserializeCostume(descriptor, runtime, zip, costumeMd5Ext || null)
+                    .then(() => {
+                        if (descriptor.asset || !storage) return descriptor.asset || null;
+                        return storage.load(assetType, assetId, dataFormat.toLowerCase());
+                    });
             });
-        });
         return assetLoad.prepareReference(assetPromise,
             () => loadCostume(costumeMd5Ext, costume, runtime, null, assetPromise, assetLoad));
         // Only attempt to load the costume after the deserialization
@@ -1493,6 +1516,15 @@ const parseScratchAssets = function (object, runtime, zip, assetLoad) {
     });
     // Sounds from JSON
     assets.soundPromises = (object.sounds || []).map(soundSource => {
+        // Same identity rules as costumes above: the file name decides which
+        // asset this reference points at, and a missing one must not make
+        // every sound in the project share one entry.
+        const declaredMd5Ext = soundSource.md5ext;
+        const soundMd5Ext = typeof declaredMd5Ext === 'string' && declaredMd5Ext ?
+            declaredMd5Ext :
+            (typeof soundSource.assetId === 'string' && soundSource.assetId ?
+                `${soundSource.assetId}.${soundSource.dataFormat || 'wav'}` :
+                '');
         const sound = {
             assetId: soundSource.assetId,
             format: soundSource.format,
@@ -1502,7 +1534,7 @@ const parseScratchAssets = function (object, runtime, zip, assetLoad) {
             // TODO we eventually want this property to be called md5ext,
             // but there are many things relying on this particular name at the
             // moment, so this translation is very important
-            md5: soundSource.md5ext,
+            md5: soundMd5Ext,
             dataFormat: soundSource.dataFormat,
             data: null
         };
@@ -1512,16 +1544,24 @@ const parseScratchAssets = function (object, runtime, zip, assetLoad) {
         // any translation that needs to happen will happen in the process
         // of building up the costume object into an sb3 format
         const storage = runtime.storage;
-        const dataFormat = sound.dataFormat || StringUtil.splitFirst(sound.md5, '.')[1] || 'wav';
-        const assetId = sound.assetId || StringUtil.splitFirst(sound.md5, '.')[0];
+        const dataFormat = sound.dataFormat ||
+            (soundMd5Ext ? StringUtil.splitFirst(soundMd5Ext, '.')[1] : null) ||
+            'wav';
+        const md5 = soundMd5Ext ? StringUtil.splitFirst(soundMd5Ext, '.')[0] : '';
+        const assetId = md5 ||
+            (typeof sound.assetId === 'string' && sound.assetId ? sound.assetId : '');
         const assetType = storage && storage.AssetType.Sound;
-        const assetPromise = assetLoad.loadAsset(assetType || 'sound', assetId, dataFormat, () => {
-            const descriptor = Object.assign({}, sound);
-            return deserializeSound(descriptor, runtime, zip).then(() => {
-                if (descriptor.asset || !storage) return descriptor.asset || null;
-                return storage.load(assetType, assetId, dataFormat.toLowerCase());
+        const assetPromise = assetLoad.loadAsset(
+            assetType || 'sound',
+            ProjectAssetLoad.identity(soundMd5Ext, assetId, dataFormat),
+            () => {
+                const descriptor = Object.assign({}, sound);
+                return deserializeSound(descriptor, runtime, zip, soundMd5Ext || null)
+                    .then(() => {
+                        if (descriptor.asset || !storage) return descriptor.asset || null;
+                        return storage.load(assetType, assetId, dataFormat.toLowerCase());
+                    });
             });
-        });
         return assetLoad.prepareReference(assetPromise,
             () => loadSound(sound, runtime, assets.soundBank, assetPromise, assetLoad));
         // Only attempt to load the sound after the deserialization
@@ -1758,7 +1798,8 @@ const parseScratchObject = function (object, runtime, extensions, zip, assets, i
         target.visible = object.visible;
     }
     if (Object.prototype.hasOwnProperty.call(object, 'currentCostume')) {
-        target.currentCostume = MathUtil.clamp(object.currentCostume, 0, object.costumes.length - 1);
+        const costumeCount = (object.costumes || []).length;
+        target.currentCostume = MathUtil.clamp(object.currentCostume, 0, Math.max(0, costumeCount - 1));
     }
     if (Object.prototype.hasOwnProperty.call(object, 'rotationStyle')) {
         target.rotationStyle = object.rotationStyle;
@@ -1779,13 +1820,20 @@ const parseScratchObject = function (object, runtime, extensions, zip, assets, i
         target.extensionStorage = object.extensionStorage;
     }
     const costumesReady = Promise.all(costumePromises).then(costumes => {
-        sprite.costumes = costumes;
         if (installWithCurrentCostume) {
-            // A costume that arrived after the sprite was installed never
-            // reached the drawable: setCostume() forwards whatever skinId the
-            // costume had at the time, and the renderer skips drawables with no
-            // skin. Re-apply now that they all have one.
+            // The sprite was installed before its assets arrived, holding
+            // `assets.costumeObjects` -- the very same objects loadCostume()
+            // has just filled in, in the same order. Assigning `costumes` here
+            // would replace the array under the user's hands, undoing any
+            // costume added or deleted while the sprite was still loading.
+            //
+            // A costume that arrived after the install never reached the
+            // drawable: setCostume() forwards whatever skinId the costume had
+            // at the time, and the renderer skips drawables with no skin.
+            // Re-apply now that they all have one.
             target.updateAllDrawableProperties();
+        } else {
+            sprite.costumes = costumes;
         }
         // Request targets update to refresh GUI when costumes are loaded
         runtime.requestTargetsUpdate(target);

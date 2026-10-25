@@ -18,31 +18,72 @@ class ProjectAssetLoad {
         });
     }
 
-    static key (assetType, assetId, dataFormat) {
-        const type = assetType && assetType.name ? assetType.name : String(assetType);
-        return `${type}\0${assetId || ''}\0${String(dataFormat || '').toLowerCase()}`;
+    /**
+     * Build the identity of an asset for caching purposes.
+     *
+     * The identity is the asset's *file name* (md5ext), lowercased, not its
+     * `assetId` field. Two references to the same file must share one download,
+     * and two references that only happen to carry the same `assetId` must not:
+     * projects that were rewritten by third-party tools routinely have an
+     * `assetId` that no longer matches `md5ext`, and sharing the first
+     * reference's bytes then shows the wrong costume or plays the wrong sound
+     * for the second one.
+     *
+     * @param {string} md5ext File name of the asset, e.g. "abc.def.png".
+     * @param {string} [fallbackId] Id to use when the file name is unusable.
+     * @param {string} [dataFormat] Format, used to complete `fallbackId`.
+     * @returns {?string} Cache identity, or null when nothing identifies it.
+     */
+    static identity (md5ext, fallbackId, dataFormat) {
+        if (typeof md5ext === 'string' && md5ext) {
+            return md5ext.toLowerCase();
+        }
+        if (typeof fallbackId === 'string' && fallbackId && fallbackId !== 'undefined' && fallbackId !== 'null') {
+            return dataFormat ? `${fallbackId}.${String(dataFormat).toLowerCase()}` : fallbackId;
+        }
+        // Nothing identifies this reference. Returning null opts out of the
+        // cache: a made-up key would merge unrelated assets.
+        return null;
     }
 
-    loadAsset (assetType, assetId, dataFormat, loader) {
-        const key = ProjectAssetLoad.key(assetType, assetId, dataFormat);
-        let promise = this.assetPromises.get(key);
-        if (!promise) {
-            promise = Promise.resolve().then(loader);
-            this.assetPromises.set(key, promise);
-            this.downloadPromises.push(promise.then(
-                result => {
-                    this.downloadCompleted++;
-                    this._emit('download');
-                    return result;
-                },
-                error => {
-                    this.downloadCompleted++;
-                    this._emit('download');
-                    if (this.assetPromises.get(key) === promise) this.assetPromises.delete(key);
-                    throw error;
-                }
-            ));
+    static key (assetType, identity) {
+        const type = assetType && assetType.name ? assetType.name : String(assetType);
+        return `${type}\0${identity}`;
+    }
+
+    /**
+     * @param {object|string} assetType Asset type, used to keep entries of
+     *     different types apart (a costume and a sound can share a file name).
+     * @param {?string} identity Cache identity from `ProjectAssetLoad.identity`,
+     *     or null to load this reference on its own.
+     * @param {Function} loader Creates the asset on first use.
+     * @returns {Promise} Promise for the asset.
+     */
+    loadAsset (assetType, identity, loader) {
+        const key = identity ? ProjectAssetLoad.key(assetType, identity) : null;
+        if (key) {
+            const cached = this.assetPromises.get(key);
+            if (cached) {
+                return cached;
+            }
         }
+        const promise = Promise.resolve().then(loader);
+        if (key) {
+            this.assetPromises.set(key, promise);
+        }
+        this.downloadPromises.push(promise.then(
+            result => {
+                this.downloadCompleted++;
+                this._emit('download');
+                return result;
+            },
+            error => {
+                this.downloadCompleted++;
+                this._emit('download');
+                if (key && this.assetPromises.get(key) === promise) this.assetPromises.delete(key);
+                throw error;
+            }
+        ));
         return promise;
     }
 

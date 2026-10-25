@@ -22,3 +22,5 @@ npm-*
 /translations
 
 bun.lock
+
+.workbuddy

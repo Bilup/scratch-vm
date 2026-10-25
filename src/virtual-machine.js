@@ -1149,7 +1149,9 @@ class VirtualMachine extends EventEmitter {
         const target = this.editingTarget;
         const originalCostume = target.getCostumes()[costumeIndex];
         const clone = Object.assign({}, originalCostume);
-        const md5ext = `${clone.assetId}.${clone.dataFormat}`;
+        // clone.md5 is the copy's file identity; deriving one from assetId +
+        // dataFormat could name a file the asset does not live under.
+        const md5ext = clone.md5 || `${clone.assetId}.${clone.dataFormat}`;
         return loadCostume(md5ext, clone, this.runtime).then(() => {
             target.addCostume(clone, costumeIndex + 1);
             target.setCostume(costumeIndex + 1);
@@ -1886,7 +1888,9 @@ class VirtualMachine extends EventEmitter {
     shareCostumeToTarget (costumeIndex, targetId) {
         const originalCostume = this.editingTarget.getCostumes()[costumeIndex];
         const clone = Object.assign({}, originalCostume);
-        const md5ext = `${clone.assetId}.${clone.dataFormat}`;
+        // clone.md5 is the copy's file identity; deriving one from assetId +
+        // dataFormat could name a file the asset does not live under.
+        const md5ext = clone.md5 || `${clone.assetId}.${clone.dataFormat}`;
         return loadCostume(md5ext, clone, this.runtime).then(() => {
             const target = this.runtime.getTargetById(targetId);
             if (target) {

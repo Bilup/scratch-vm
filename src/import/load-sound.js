@@ -16,6 +16,30 @@ const decodeSoundBuffer = new AsyncLimiter(
 );
 
 /**
+ * Keep a sound's asset identity (`assetId`, `dataFormat`, `md5`) in sync with
+ * the asset it actually holds. See syncCostumeAssetIdentity in load-costume.js:
+ * `md5` is what ends up in project.json while the zip entry is named after the
+ * asset, so the two must be derived from the same place.
+ * @param {!object} sound The sound to update in place.
+ * @param {!Asset} soundAsset The asset backing it.
+ * @returns {!object} The same sound.
+ */
+const syncSoundAssetIdentity = function (sound, soundAsset) {
+    const asset = soundAsset || sound.asset;
+    if (!asset) return sound;
+    if (asset.assetId) {
+        sound.assetId = asset.assetId;
+    }
+    if (typeof asset.dataFormat === 'string' && asset.dataFormat) {
+        sound.dataFormat = asset.dataFormat;
+    }
+    if (sound.assetId && sound.dataFormat) {
+        sound.md5 = `${sound.assetId}.${sound.dataFormat}`;
+    }
+    return sound;
+};
+
+/**
  * Initialize a sound from an asset asynchronously.
  * @param {!object} sound - the Scratch sound object.
  * @property {string} md5 - the MD5 and extension of the sound to be loaded.
@@ -27,7 +51,15 @@ const decodeSoundBuffer = new AsyncLimiter(
  * @returns {!Promise} - a promise which will resolve to the sound when ready.
  */
 const loadSoundFromAsset = function (sound, soundAsset, runtime, soundBank, assetLoad) {
-    sound.assetId = soundAsset.assetId;
+    if (!soundAsset) {
+        // A packaged runtime drops asset data once the sound has been decoded,
+        // so a sound duplicated in that state has nothing to decode again. Keep
+        // the copy (and its player) instead of dereferencing the missing asset.
+        log.warn(`No asset data for sound: ${sound.md5}`);
+        return Promise.resolve(sound);
+    }
+    sound.asset = soundAsset;
+    syncSoundAssetIdentity(sound, soundAsset);
     if (!runtime.audioEngine) {
         log.warn(`No audio engine present; cannot load sound asset: ${sound.md5}`);
         return Promise.resolve(sound);
@@ -75,21 +107,31 @@ const loadSoundFromAsset = function (sound, soundAsset, runtime, soundBank, asse
 const handleSoundLoadError = function (sound, runtime, soundBank, assetLoad) {
     // Keep track of the old asset information until we're done loading the default sound
     const oldAsset = sound.asset; // could be null
-    const oldAssetId = sound.assetId;
+    // The asset, when there is one, is what serialize-assets.js writes to the
+    // zip, so `broken` has to record its identity rather than the one derived
+    // from md5ext.
+    const oldAssetId = (oldAsset && oldAsset.assetId) || sound.assetId;
     const oldSample = sound.sampleCount;
     const oldRate = sound.rate;
     const oldFormat = sound.format;
-    const oldDataFormat = sound.dataFormat;
-                
+    const oldDataFormat = (oldAsset && oldAsset.dataFormat) || sound.dataFormat;
+
     // Use default asset if original fails to load
     sound.assetId = runtime.storage.defaultAssetId.Sound;
     sound.asset = runtime.storage.get(sound.assetId);
-    sound.md5 = `${sound.assetId}.${sound.asset.dataFormat}`;
+    // The sound is no longer the one the project described: take the format
+    // from the asset that replaced it, and drop the old codec hint. Leaving
+    // `format: 'adpcm'` on a sound whose data is now a plain wav made the sound
+    // editor decode it with the wrong decoder.
+    sound.format = '';
+    syncSoundAssetIdentity(sound, sound.asset);
 
     return loadSoundFromAsset(sound, sound.asset, runtime, soundBank, assetLoad).then(loadedSound => {
         loadedSound.broken = {};
         loadedSound.broken.assetId = oldAssetId;
-        loadedSound.broken.md5 = `${oldAssetId}.${oldDataFormat}`;
+        if (oldAssetId && oldDataFormat) {
+            loadedSound.broken.md5 = `${oldAssetId}.${oldDataFormat}`;
+        }
 
         // Should be null if we got here because the sound was missing
         loadedSound.broken.asset = oldAsset;
@@ -119,10 +161,14 @@ const loadSound = function (sound, runtime, soundBank, assetPromise, assetLoad) 
         log.warn('No storage module present; cannot load sound asset: ', sound.md5);
         return Promise.resolve(sound);
     }
-    const idParts = StringUtil.splitFirst(sound.md5, '.');
+    // A malformed md5ext makes this a missing sound, not a reason to throw and
+    // take the whole project down with it.
+    const idParts = StringUtil.splitFirst(typeof sound.md5 === 'string' ? sound.md5 : '', '.');
     const md5 = idParts[0];
-    const ext = idParts[1].toLowerCase();
-    sound.dataFormat = ext;
+    const ext = (idParts[1] || sound.dataFormat || '').toLowerCase();
+    if (ext) {
+        sound.dataFormat = ext;
+    }
     const resolvedAsset = assetPromise ||
         (sound.asset && Promise.resolve(sound.asset)) ||
         runtime.storage.load(runtime.storage.AssetType.Sound, md5, ext);
