@@ -1023,9 +1023,15 @@ const serializeMonitors = function (monitors, runtime, extensions) {
  * Serializes the specified VM runtime.
  * @param {!Runtime} runtime VM runtime instance to be serialized.
  * @param {string=} targetId Optional target id if serializing only a single target
+ * @param {object=} options Serialization options.
+ * @param {boolean=} options.allowOptimization Whether to shrink block and comment ids.
+ * @param {object=} options.meta Extra fields to merge into the `meta` block of the
+ *     project, e.g. an author or an edited timestamp. Merged last, so it can
+ *     override the built-in fields; anything it leaves out is kept. Ignored when
+ *     serializing a single target, since a sprite has no `meta` block.
  * @return {object} Serialized runtime instance.
  */
-const serialize = function (runtime, targetId, {allowOptimization = true} = {}) {
+const serialize = function (runtime, targetId, {allowOptimization = true, meta = null} = {}) {
     // Fetch targets
     const obj = Object.create(null);
     // Create extension set to hold extension ids found while serializing targets
@@ -1115,24 +1121,30 @@ const serialize = function (runtime, targetId, {allowOptimization = true} = {}) 
     }
 
     // Assemble metadata
-    const meta = Object.create(null);
-    meta.semver = '3.0.0';
+    const projectMeta = Object.create(null);
+    projectMeta.semver = '3.0.0';
     // TW: There isn't a good reason to put the full version number in the json, so we don't.
-    meta.vm = '0.2.0';
+    projectMeta.vm = '0.2.0';
     if (runtime.origin) {
-        meta.origin = runtime.origin;
+        projectMeta.origin = runtime.origin;
     }
 
     // Attach full user agent string to metadata if available
-    meta.agent = '';
+    projectMeta.agent = '';
     // TW: Never include full user agent to slightly improve user privacy
-    // if (typeof navigator !== 'undefined') meta.agent = navigator.userAgent;
+    // if (typeof navigator !== 'undefined') projectMeta.agent = navigator.userAgent;
 
     // TW: Attach copy of platform information
-    meta.platform = Object.assign({}, runtime.platform);
+    projectMeta.platform = Object.assign({}, runtime.platform);
+
+    // Caller-supplied fields (author, created, edited, ...) go on top of the
+    // built-in ones, so a project keeps the values it was loaded with.
+    if (meta) {
+        Object.assign(projectMeta, meta);
+    }
 
     // Assemble payload and return
-    obj.meta = meta;
+    obj.meta = projectMeta;
 
     if (allowOptimization) {
         compress(obj);

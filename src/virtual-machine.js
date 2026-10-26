@@ -68,6 +68,55 @@ formatMessage.setup({
     missingTranslation: 'ignore'
 });
 
+/**
+ * How hard to squeeze each kind of file in a saved sb3.
+ *
+ * DEFLATE is not free: on a 40 MB project (6 fonts totalling 20 MB, 1847 SVGs
+ * totalling 15 MB) compressing every entry at level 6 costs 5.7 s of blocking
+ * main-thread work, and the fonts alone are 3 s of it. The gain from a higher
+ * level depends entirely on the format, so the level follows the format:
+ *
+ *   format  raw      lvl 1          lvl 3          lvl 6          lvl 9
+ *   .ttf    20.5MB   1.2s/11.8MB    1.5s/11.3MB    3.1s/10.7MB    6.1s/10.6MB
+ *   .svg    14.5MB   1.3s/ 5.7MB    1.1s/ 5.4MB    1.7s/ 5.0MB    3.1s/ 4.9MB
+ *   .json    4.3MB   84ms/0.68MB    87ms/0.61MB    159ms/0.52MB   424ms/0.49MB
+ *   .wav    10.0MB   784ms/9.74MB   809ms/9.74MB   799ms/9.74MB   810ms/9.74MB
+ *
+ * So: fonts get level 1 (level 6 spends 1.8 s more to save 1.2 MB of a 38 MB
+ * file), text gets level 3 (level 1 is no faster and 6% larger), and WAV is
+ * stored as-is -- deflate finds 2.6% in PCM audio for 80 ms/MB, which is pure
+ * loss. Everything else (PNG, MP3, JPEG, ...) was already stored, since those
+ * are compressed formats.
+ *
+ * Formats not listed here are stored uncompressed.
+ * @type {Readonly<Record<string, number>>}
+ */
+const COMPRESSION_LEVELS = Object.freeze({
+    '.json': 3,
+    '.css': 3,
+    '.svg': 3,
+    '.ttf': 1,
+    '.otf': 1
+});
+
+/**
+ * JSZip options for writing one entry of an sb3.
+ * @param {string} fileName Name of the entry inside the zip.
+ * @returns {{compression: string, compressionOptions?: {level: number}}} JSZip
+ *     file options: DEFLATE at the level chosen for that format, or STORE.
+ */
+const getSb3CompressionOptions = fileName => {
+    for (const extension of Object.keys(COMPRESSION_LEVELS)) {
+        if (fileName.endsWith(extension)) {
+            return {
+                compression: 'DEFLATE',
+                compressionOptions: {level: COMPRESSION_LEVELS[extension]}
+            };
+        }
+    }
+    return {compression: 'STORE'};
+};
+
 const safePerformanceMark = name => {
     if (typeof performance === 'undefined' || typeof performance.mark !== 'function') return;
     try {
@@ -622,8 +671,22 @@ class VirtualMachine extends EventEmitter {
     }
 
     /**
+     * How this VM compresses one entry of a saved sb3. Exposed for code that
+     * assembles an sb3 by hand -- e.g. reusing a previous save's compressed
+     * assets -- so that it can produce the same bytes as an ordinary save,
+     * instead of growing a second copy of the policy.
+     * @param {string} fileName Name of the entry inside the zip.
+     * @returns {{compression: string, compressionOptions?: {level: number}}}
+     *     JSZip file options for that entry.
+     */
+    getSb3CompressionOptions (fileName) {
+        return getSb3CompressionOptions(fileName);
+    }
+
+    /**
      * @param {object} [options] Options for saving the project
      * @param {boolean} [options.allowOptimization=true] Whether to optimize block and comment IDs
+     * @param {object} [options.meta] Fields to merge into the `meta` block of project.json
      * @returns {JSZip} JSZip zip object representing the sb3.
      */
     _saveProjectZip (options = {}) {
@@ -646,20 +709,11 @@ class VirtualMachine extends EventEmitter {
             file.date = date;
         }
 
-        // Tell JSZip to only compress file formats where there will be a significant gain.
-        const COMPRESSABLE_FORMATS = [
-            '.json',
-            '.svg',
-            '.wav',
-            '.ttf',
-            '.otf'
-        ];
+        // Tell JSZip how hard to squeeze each entry. Per-file options win over the
+        // ones passed to generate(), so this is the only place compression is
+        // decided -- see COMPRESSION_LEVELS for why it varies by format.
         for (const file of Object.values(zip.files)) {
-            if (COMPRESSABLE_FORMATS.some(ext => file.name.endsWith(ext))) {
-                file.options.compression = 'DEFLATE';
-            } else {
-                file.options.compression = 'STORE';
-            }
+            Object.assign(file.options, getSb3CompressionOptions(file.name));
         }
 
         return zip;
@@ -683,6 +737,7 @@ class VirtualMachine extends EventEmitter {
      * @param {JSZip.OutputType} [type] JSZip output type. Defaults to 'arraybuffer'.
      * @param {object} [options] Options for saving the project
      * @param {boolean} [options.allowOptimization=true] Whether to optimize block and comment IDs
+     * @param {object} [options.meta] Fields to merge into the `meta` block of project.json
      * @returns {StreamHelper} JSZip StreamHelper object generating the compressed sb3.
      * See: https://stuk.github.io/jszip/documentation/api_streamhelper.html
      */
@@ -700,6 +755,7 @@ class VirtualMachine extends EventEmitter {
      * manipulating them (except project.json, which is created by this function).
      * @param {object} [options] Options for saving the project
      * @param {boolean} [options.allowOptimization=true] Whether to optimize block and comment IDs
+     * @param {object} [options.meta] Fields to merge into the `meta` block of project.json
      * @returns {Record<string, Uint8Array>} Map of file name to the raw data for that file.
      */
     saveProjectSb3DontZip (options) {
@@ -796,7 +852,9 @@ class VirtualMachine extends EventEmitter {
     /**
      * Export project or sprite as a Scratch 3.0 JSON representation.
      * @param {string=} optTargetId - Optional id of a sprite to serialize
-     * @param {*} serializationOptions Options to pass to the serializer
+     * @param {*} serializationOptions Options to pass to the serializer. For a
+     *     whole project, `{meta}` merges extra fields into the `meta` block,
+     *     which saves re-parsing the json just to stamp a timestamp or author.
      * @return {string} Serialized state of the runtime.
      */
     toJSON (optTargetId, serializationOptions) {
@@ -2226,5 +2284,15 @@ class VirtualMachine extends EventEmitter {
         this.runtime.configureScratchLinkSocketFactory(factory);
     }
 }
+
+/**
+ * Whether this build understands the `meta` option of `toJSON()` and the save
+ * methods, which merges fields into project.json's `meta` block while the
+ * project is being serialized. Older builds ignore options they don't know, so
+ * a caller that must also work against one of those can check this flag and
+ * fall back to post-processing the json itself.
+ * @type {boolean}
+ */
+VirtualMachine.SUPPORTS_SERIALIZE_META = true;
 
 module.exports = VirtualMachine;

@@ -14,6 +14,7 @@ const draggableSB3ProjectPath = path.resolve(__dirname, '../fixtures/draggable.s
 const originSB3ProjectPath = path.resolve(__dirname, '../fixtures/origin.sb3');
 const originAbsentSB3ProjectPath = path.resolve(__dirname, '../fixtures/origin-absent.sb3');
 const FakeRenderer = require('../fixtures/fake-renderer');
+const makeTestStorage = require('../fixtures/make-test-storage');
 
 test('serialize', t => {
     const vm = new VirtualMachine();
@@ -528,4 +529,56 @@ test('pi and newline round trip through stage variables', t => {
         t.notOk(reloadedOpcodes.includes('data_variable'), 'no leftover variable reporters');
         t.end();
     })();
+});
+
+test('serialize merges caller-supplied meta fields', t => {
+    const vm = new VirtualMachine();
+    vm.loadProject(readFileToBuffer(exampleProjectPath))
+        .then(() => {
+            const extra = {
+                author: {username: 'someone'},
+                created: '2026-01-01T00:00:00.000Z',
+                edited: '2026-01-02T00:00:00.000Z'
+            };
+            const json = JSON.parse(vm.toJSON(null, {meta: extra}));
+            t.same(json.meta.author, extra.author, 'author written');
+            t.equal(json.meta.created, extra.created, 'created written');
+            t.equal(json.meta.edited, extra.edited, 'edited written');
+            t.equal(json.meta.semver, '3.0.0', 'built-in fields kept');
+            t.type(json.meta.platform, 'object', 'platform kept');
+
+            t.notOk(JSON.parse(vm.toJSON()).meta.author, 'no extra fields without the option');
+
+            const targetId = vm.runtime.targets.find(target => !target.isStage && target.isOriginal).id;
+            t.notOk(JSON.parse(vm.toJSON(targetId, {meta: extra})).meta, 'sprites have no meta block');
+            t.end();
+        });
+});
+
+test('compression depends on the file format', t => {
+    const vm = new VirtualMachine();
+    const options = name => vm.getSb3CompressionOptions(name);
+    t.equal(options('project.json').compression, 'DEFLATE', 'json is compressed');
+    t.equal(options('abc.svg').compression, 'DEFLATE', 'svg is compressed');
+    t.equal(options('abc.ttf').compression, 'DEFLATE', 'fonts are compressed');
+    t.equal(options('abc.wav').compression, 'STORE', 'pcm audio barely compresses, so it is stored');
+    t.equal(options('abc.mp3').compression, 'STORE', 'already-compressed audio is stored');
+    t.equal(options('abc.png').compression, 'STORE', 'already-compressed images are stored');
+    t.ok(options('abc.ttf').compressionOptions.level < options('abc.svg').compressionOptions.level,
+        'fonts are squeezed less than text');
+
+    vm.attachStorage(makeTestStorage());
+    vm.loadProject(readFileToBuffer(path.resolve(__dirname, '../fixtures/monitored_variables.sb3')))
+        .then(() => {
+            const zip = vm._saveProjectZip();
+            const names = Object.keys(zip.files).filter(name => !zip.files[name].dir);
+            t.ok(names.length > 2, 'the project has several entries');
+            t.ok(names.some(name => name.endsWith('.wav')), 'has a wav');
+            t.ok(names.some(name => name.endsWith('.svg')), 'has an svg');
+            for (const name of names) {
+                t.equal(zip.files[name].options.compression, options(name).compression,
+                    `${name} uses its format's method`);
+            }
+            t.end();
+        });
 });
