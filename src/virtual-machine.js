@@ -1414,13 +1414,17 @@ class VirtualMachine extends EventEmitter {
      *     2 for double-resolution bitmaps
      */
     updateBitmap (costumeIndex, bitmap, rotationCenterX, rotationCenterY, bitmapResolution) {
-        return this._updateBitmap(
-            this.editingTarget.getCostumes()[costumeIndex],
+        const target = this.editingTarget;
+        const costume = target.getCostumes()[costumeIndex];
+        const result = this._updateBitmap(
+            costume,
             bitmap,
             rotationCenterX,
             rotationCenterY,
             bitmapResolution
         );
+        this._refreshDrawableAfterCostumeEdit(target, costume);
+        return result;
     }
 
     _updateBitmap (costume, bitmap, rotationCenterX, rotationCenterY, bitmapResolution) {
@@ -1483,12 +1487,51 @@ class VirtualMachine extends EventEmitter {
      * @param {number} rotationCenterY y of point about which the costume rotates, relative to its upper left corner
      */
     updateSvg (costumeIndex, svg, rotationCenterX, rotationCenterY) {
-        return this._updateSvg(
-            this.editingTarget.getCostumes()[costumeIndex],
+        const target = this.editingTarget;
+        const costume = target.getCostumes()[costumeIndex];
+        const result = this._updateSvg(
+            costume,
             svg,
             rotationCenterX,
             rotationCenterY
         );
+        this._refreshDrawableAfterCostumeEdit(target, costume);
+        return result;
+    }
+
+    /**
+     * Make the drawable that is showing a just-edited costume pick the new
+     * pixels up now.
+     *
+     * Editing a costume rewrites the skin behind `costume.skinId` in place.
+     * Nothing in the VM re-points the drawable afterwards, so a drawable that
+     * had drifted off that skin -- a costume whose asset landed after the
+     * sprite was installed, a skin that had to be rebuilt, a drawable that was
+     * re-pointed while the asset was still missing -- kept rendering the pixels
+     * it already had. The stage then showed the previous costume until
+     * something unrelated re-applied the drawable, which is why selecting the
+     * sprite (a full setCostume/updateAllDrawableProperties) made the edit
+     * appear.
+     *
+     * Re-applying it here costs one property assignment: the renderer's setter
+     * is a no-op when the drawable already holds this skin, and marking the
+     * runtime for a redraw gets the new pixels on screen on the next frame.
+     * @param {?RenderedTarget} target The target that owns the costume.
+     * @param {?object} costume The costume that was just updated.
+     */
+    _refreshDrawableAfterCostumeEdit (target, costume) {
+        if (!target || !costume || !this.runtime) return;
+        const renderer = this.runtime.renderer;
+        if (!renderer) return;
+        // Only the costume the target is actually showing is on the stage.
+        if (target.getCurrentCostume() !== costume) return;
+        const skinId = costume.skinId;
+        // Matches RenderedTarget._updateDrawableSkinId(): a costume that never
+        // loaded has no skin to give, and passing that on used to wipe the
+        // drawable's skin.
+        if (typeof skinId !== 'number' || skinId < 0) return;
+        renderer.updateDrawableSkinId(target.drawableID, skinId);
+        this.runtime.requestRedraw();
     }
 
     _updateSvg (costume, svg, rotationCenterX, rotationCenterY) {
