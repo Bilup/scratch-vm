@@ -336,6 +336,58 @@ test('custom fonts', t => {
     t.end();
 });
 
+test('registerCustomFont batches updates', t => {
+    let setCustomFontsCalls = 0;
+    const mockRenderer = {
+        setLayerGroupOrdering: () => {},
+        setCustomFonts: () => {
+            setCustomFontsCalls++;
+        }
+    };
+
+    const rt = new Runtime();
+    rt.attachRenderer(mockRenderer);
+    rt.attachStorage(makeTestStorage());
+    const {fontManager, storage} = rt;
+
+    let changeEvents = 0;
+    fontManager.on('change', () => {
+        changeEvents++;
+    });
+
+    const fontA = storage.createAsset(
+        storage.AssetType.Font,
+        storage.DataFormat.TTF,
+        new Uint8Array([1, 2, 3]),
+        null,
+        true
+    );
+    const fontB = storage.createAsset(
+        storage.AssetType.Font,
+        storage.DataFormat.TTF,
+        new Uint8Array([4, 5, 6]),
+        null,
+        true
+    );
+
+    t.ok(fontManager.registerCustomFont('Bulk A', 'sans-serif', fontA), 'registers the first font');
+    t.ok(fontManager.registerCustomFont('Bulk B', 'monospace', fontB), 'registers the second font');
+    t.equal(setCustomFontsCalls, 0, 'does not update the renderer per font');
+    t.equal(changeEvents, 0, 'does not emit change per font');
+    t.same(fontManager.getFonts().map(i => i.name), ['Bulk A', 'Bulk B'], 'keeps registration order');
+
+    // What deserialize() does once, after registering everything.
+    fontManager.updateRenderer();
+    fontManager.changed();
+    t.equal(setCustomFontsCalls, 1, 'one renderer update for all fonts');
+    t.equal(changeEvents, 1, 'one change event for all fonts');
+
+    t.notOk(fontManager.registerCustomFont('Bulk C', 'serif', null), 'a font without data is not registered');
+    t.equal(setCustomFontsCalls, 1, 'and does not cause another renderer update');
+
+    t.end();
+});
+
 test('custom font validation', t => {
     const rt = new Runtime();
     rt.attachStorage(makeTestStorage());
