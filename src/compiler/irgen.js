@@ -124,6 +124,15 @@ class ScriptTreeGenerator {
          */
         this.descendDepth = 0;
 
+        /**
+         * How many switch constructs are currently being descended into. Cases
+         * and defaults outside a switch are valid project data (the interpreter
+         * ignores them) but cannot be turned into JavaScript labels.
+         * @type {number}
+         * @private
+         */
+        this.switchDepth = 0;
+
         this.namesOfCostumesAndSounds = new Set();
         for (const target of this.runtime.targets) {
             if (target.isOriginal) {
@@ -231,10 +240,16 @@ class ScriptTreeGenerator {
         try {
             const input = parentBlock.inputs[inputName];
             if (!input) {
-                log.warn(`IR: ${parentBlock.opcode}: missing input ${inputName}`, parentBlock);
+                // Variadic operators can be saved with fewer inputs than their
+                // mutation claims (empty trailing slots are dropped on save), so an
+                // absent input is a valid empty slot, not a broken project.
                 return this.createConstantInput(0);
             }
             const inputId = input.block;
+            if (!inputId) {
+                // An empty input slot ([1, null] in sb3) has no block behind it.
+                return this.createConstantInput(0);
+            }
             const block = this.getBlockById(inputId);
             if (!block) {
                 log.warn(`IR: ${parentBlock.opcode}: could not find input ${inputName} with ID ${inputId}`);
@@ -830,26 +845,45 @@ class ScriptTreeGenerator {
                 // We should consider analyzing this like we do for control_repeat_until
                 warpTimer: false
             }, this.analyzeLoop());
-        case 'control_switch':
+        case 'control_switch': {
+            const value = this.descendSwitchValue(block);
+            this.switchDepth++;
+            let doStack;
+            try {
+                doStack = this.descendSubstack(block, 'SUBSTACK');
+            } finally {
+                this.switchDepth--;
+            }
             return new IntermediateStackBlock(StackOpcode.CONTROL_SWITCH, {
-                value: this.descendSwitchValue(block),
-                do: this.descendSubstack(block, 'SUBSTACK')
+                value,
+                do: doStack
             });
-        case 'control_case':
+        }
+        case 'control_case': {
+            // An orphan case is a no-op in the interpreter (see scratch3_control),
+            // so it must not emit a `case` label outside a switch.
+            if (this.switchDepth === 0) return new IntermediateStackBlock(StackOpcode.NOP);
             return new IntermediateStackBlock(StackOpcode.CONTROL_CASE, {
                 value: this.descendSwitchValue(block),
                 do: this.descendSubstack(block, 'SUBSTACK')
             });
-        case 'control_default':
+        }
+        case 'control_default': {
+            // See control_case above.
+            if (this.switchDepth === 0) return new IntermediateStackBlock(StackOpcode.NOP);
             return new IntermediateStackBlock(StackOpcode.CONTROL_DEFAULT, {
                 do: this.descendSubstack(block, 'SUBSTACK')
             });
+        }
         case 'control_break':
             return new IntermediateStackBlock(StackOpcode.CONTROL_BREAK);
-        case 'control_case_fallthrough':
+        case 'control_case_fallthrough': {
+            // See control_case above.
+            if (this.switchDepth === 0) return new IntermediateStackBlock(StackOpcode.NOP);
             return new IntermediateStackBlock(StackOpcode.CONTROL_CASE_FALLTHROUGH, {
                 value: this.descendSwitchValue(block)
             });
+        }
         case 'control_clear_counter':
             return new IntermediateStackBlock(StackOpcode.CONTROL_CLEAR_COUNTER);
         case 'control_incr_counter':
