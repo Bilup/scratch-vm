@@ -1,5 +1,3 @@
-const log = require('./log');
-
 const UNSAFE_RE = /[<>&'"]/;
 
 /**
@@ -12,14 +10,9 @@ const UNSAFE_RE = /[<>&'"]/;
  */
 const xmlEscape = function (unsafe) {
     if (typeof unsafe !== 'string') {
-        if (Array.isArray(unsafe)) {
-            // This happens when we have hacked blocks from 2.0
-            // See #1030
-            unsafe = String(unsafe);
-        } else {
-            log.error('Unexpected input received in xmlEscape');
-            return unsafe;
-        }
+        // Blocks from 2.0 can hold arrays, and block defaults are sometimes numbers.
+        // Both are interpolated into the XML, so stringify instead of warning.
+        unsafe = String(unsafe);
     }
     // Most strings (block ids, opcodes, field names) contain nothing to escape.
     if (!UNSAFE_RE.test(unsafe)) {

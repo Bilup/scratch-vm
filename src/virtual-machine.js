@@ -1739,7 +1739,10 @@ class VirtualMachine extends EventEmitter {
      */
     setLocale (locale, messages) {
         if (locale !== formatMessage.setup().locale) {
-            formatMessage.setup({locale: locale, translations: {[locale]: messages}});
+            // format-message caches compiled translations by replacing string entries
+            // in the translations map with objects, so hand it a copy: the caller's
+            // messages object is shared with the GUI's Redux store and must stay flat.
+            formatMessage.setup({locale: locale, translations: {[locale]: Object.assign({}, messages)}});
         }
         this.emit('LOCALE_CHANGED', locale);
         return this.extensionManager.refreshBlocks();
