@@ -92,10 +92,36 @@ class FrameLoop {
         this._pendingDraw = true;
     }
 
-    stepImmediateCallback () {
-        if (this.now() - this._lastStepTime >= this.runtime.currentStepTime) {
+    /**
+     * 高帧率（>250fps）逻辑步调度。
+     *
+     * 浏览器会把 setInterval 的最小间隔钳制在 4ms 左右，单靠定时器无法达到
+     * 更高的逻辑步频率。改造前这里用 setImmediate 自排队实现，而浏览器里的
+     * setImmediate polyfill 实际是 window.postMessage 自消息：它以远高于目标
+     * 帧率的频率（约 2 万次/秒）向原生任务队列投递消息，队列排空速度跟不上，
+     * 导致渲染进程堆外内存持续增长。
+     *
+     * 这里改为在每次定时器回调里按经过的时间补足相应数量的逻辑步，不再依赖
+     * 高频消息队列，既能达到超过 250fps 的逻辑步频率，也不会产生任务堆积。
+     */
+    stepHighRateCallback () {
+        const stepTime = this.runtime.currentStepTime;
+        // 单次调度内最多补足的逻辑步数，避免长时间挂起（断点、窗口最小化）
+        // 之后一次性追帧造成长时间无响应。
+        const maxSteps = 25;
+        let steps = 0;
+        let now = this.now();
+        while (steps < maxSteps && now - this._lastStepTime >= stepTime) {
             this.runtime._step();
-            this._lastStepTime = this.now();
+            this._lastStepTime += stepTime;
+            steps++;
+            now = this.now();
+        }
+        if (now - this._lastStepTime >= stepTime) {
+            // 已经到达补帧上限，丢弃积压时间，防止追帧雪崩。
+            this._lastStepTime = now;
+        }
+        if (steps > 0) {
             this._pendingDraw = true;
         }
     }
@@ -179,14 +205,17 @@ class FrameLoop {
                 _cancelAnimationFrame,
                 true
             );
-            if (this.framerate > 250 && global.setImmediate && global.clearImmediate) {
-                // High precision implementation via setImmediate (polyfilled)
-                // bug: very unfriendly to DevTools
+            if (this.framerate > 250) {
+                // 高帧率：定时器间隔会被浏览器钳制，实际间隔不重要，回调里
+                // 会按经过的时间补足逻辑步；不再使用 setImmediate 自排队，
+                // 原因见 stepHighRateCallback 的注释。
+                // 重新启动时重置计时基准，避免把启动前的空档补成一串逻辑步。
+                this._lastStepTime = this.now();
                 this._stepInterval = taskWrapper(
-                    this.stepImmediateCallback.bind(this),
-                    global.setImmediate,
-                    global.clearImmediate,
-                    true
+                    this.stepHighRateCallback.bind(this),
+                    fn => setInterval(fn, Math.max(1000 / this.framerate, 4)),
+                    clearInterval,
+                    false
                 );
             } else {
                 this._stepInterval = taskWrapper(

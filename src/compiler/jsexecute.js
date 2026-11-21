@@ -761,7 +761,9 @@ const scopedEval = source => {
     try {
         return new Function('globalState', withRuntime)(globalState);
     } catch (e) {
-        globalState.log.error('was unable to compile script', withRuntime);
+        // Log the error itself and the script factory, not the runtime helpers:
+        // dumping insertRuntime() output buried the cause and flooded the console.
+        globalState.log.error(`was unable to compile script: ${e && e.message}`, source);
         throw e;
     }
 };

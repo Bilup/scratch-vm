@@ -157,16 +157,24 @@ class FontManager extends EventEmitter {
     }
 
     /**
+     * Register a custom font without telling the renderer or the UI about it.
+     * Used to add many fonts in one go: updateRenderer() re-encodes every custom
+     * font's data as a data URI and rebuilds the whole @font-face list, so calling
+     * it once per font made loading N fonts cost O(N^2) work (measured 3.4 s and
+     * 27 MB of CSS for six fonts). Callers are responsible for calling
+     * updateRenderer() and changed() afterwards.
+     *
      * @param {string} family
      * @param {string} fallback
      * @param {Asset} asset scratch-storage asset
+     * @returns {boolean} true if the font list changed
      */
-    addCustomFont (family, fallback, asset) {
+    registerCustomFont (family, fallback, asset) {
         if (!this.isValidCustomFont(family)) {
             throw new Error('Invalid custom font family');
         }
         if (!asset) {
-            return;
+            return false;
         }
         addOrUpdateFont(this.fonts, {
             system: false,
@@ -174,8 +182,19 @@ class FontManager extends EventEmitter {
             fallback,
             asset
         });
-        this.updateRenderer();
-        this.changed();
+        return true;
+    }
+
+    /**
+     * @param {string} family
+     * @param {string} fallback
+     * @param {Asset} asset scratch-storage asset
+     */
+    addCustomFont (family, fallback, asset) {
+        if (this.registerCustomFont(family, fallback, asset)) {
+            this.updateRenderer();
+            this.changed();
+        }
     }
 
     /**
@@ -366,11 +385,29 @@ class FontManager extends EventEmitter {
 
         if (pendingFonts.length) {
             const results = await Promise.all(pendingFonts.map(font => font.promise));
+            // Register in list order, but without notifying after each one: a
+            // single updateRenderer() below emits every @font-face once instead
+            // of re-encoding all previous fonts for every font added.
+            let fontsChanged = false;
             for (let i = 0; i < pendingFonts.length; i++) {
                 const asset = results[i].asset;
                 if (asset) {
-                    this.addCustomFont(pendingFonts[i].family, pendingFonts[i].fallback, asset);
+                    try {
+                        fontsChanged = this.registerCustomFont(
+                            pendingFonts[i].family,
+                            pendingFonts[i].fallback,
+                            asset
+                        ) || fontsChanged;
+                    } catch (e) {
+                        // Keep one bad family from failing the whole load, as
+                        // the per-font try/catch used to.
+                        log.error('could not add font', e);
+                    }
                 }
+            }
+            if (fontsChanged) {
+                this.updateRenderer();
+                this.changed();
             }
         }
     }
