@@ -962,6 +962,13 @@ class VirtualMachine extends EventEmitter {
                 if (!url) {
                     throw new Error(`Unknown extension: ${extensionID}`);
                 }
+                // Record the project's own ID-to-URL mapping before deciding
+                // whether to load it. The project is about to contain blocks from
+                // this extension, so a save has to write the URL back even when
+                // the load is denied, fails, or times out — otherwise the saved
+                // project references an extension ID with no URL and can never be
+                // opened again ("Unknown extension: <id>").
+                this.extensionManager.rememberExtensionURL(extensionID, url);
                 if (await this.securityManager.canLoadExtensionFromProject(url)) {
                     extensionPromises.push(this.extensionManager.loadExtensionURL(url));
                 }

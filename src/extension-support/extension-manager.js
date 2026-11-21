@@ -130,6 +130,16 @@ class ExtensionManager {
         this._loadedExtensions = new Map();
 
         /**
+         * Map of extension ID to the URL the project said it lives at, recorded
+         * when a project is loaded. Kept separately from _loadedExtensions so a
+         * project that references an extension which failed, timed out, or was
+         * denied still saves its URL instead of becoming unopenable.
+         * @type {Map.<string,string>}
+         * @private
+         */
+        this._knownExtensionURLs = new Map();
+
+        /**
          * Responsible for determining security policies related to custom extensions.
          */
         this.securityManager = new SecurityManager();
@@ -441,6 +451,9 @@ class ExtensionManager {
         this._loadedExtensions.delete(extensionURL);
         const workerId = +serviceName.split('.')[1];
         delete this.workerURLs[workerId];
+        // Forget where the project said this extension lives, so deleting an
+        // extension also removes it from later saves.
+        this._knownExtensionURLs.delete(extensionURL);
 
         // Remove the extension category and primitives from runtime.
         dispatch.call('runtime', '_unregisterExtensionPrimitives', extensionURL);
@@ -832,8 +845,26 @@ class ExtensionManager {
         return blockInfo;
     }
 
+    /**
+     * Record where the project said an extension lives. Called for every custom
+     * extension a project references, before it is loaded, so the project can
+     * still be saved with that URL if the load is denied, fails, or times out.
+     * @param {string} extensionID - the extension's ID, as used in block opcodes
+     * @param {string} url - the URL the project declared for it
+     */
+    rememberExtensionURL (extensionID, url) {
+        if (typeof extensionID === 'string' && typeof url === 'string') {
+            this._knownExtensionURLs.set(extensionID, url);
+        }
+    }
+
     getExtensionURLs () {
+        // Start from what the project declared, then let actually-loaded
+        // extensions override it (their worker knows the URL that really worked).
         const extensionURLs = {};
+        for (const [extensionId, url] of this._knownExtensionURLs) {
+            extensionURLs[extensionId] = url;
+        }
         for (const [extensionId, serviceName] of this._loadedExtensions.entries()) {
             if (Object.prototype.hasOwnProperty.call(this.builtinExtensions, extensionId)) {
                 continue;
