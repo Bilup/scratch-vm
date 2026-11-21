@@ -40,6 +40,15 @@ class ExtensionWorker {
                 const [id, extension] = x;
                 this.workerId = id;
 
+                if (!extension) {
+                    // The load that created this worker already timed out and its
+                    // queue entry was skipped. There is nothing to load and nobody
+                    // waiting for onWorkerInit, so stay idle instead of trying to
+                    // load "undefined".
+                    log.warn(`Extension worker ${id} was not given an extension to load`);
+                    return;
+                }
+
                 try {
                     await loadScripts(extension);
                     await this.firstRegistrationPromise;
@@ -52,6 +61,10 @@ class ExtensionWorker {
                     log.error(e);
                     dispatch.call('extensions', 'onWorkerInit', id, `${e}`);
                 }
+            }).catch(error => {
+                // allocateWorker itself failed (should not happen): log it instead
+                // of leaving an unhandled rejection in the worker.
+                log.error('Failed to allocate an extension worker slot', error);
             });
         });
 

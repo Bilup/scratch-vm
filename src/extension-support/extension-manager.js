@@ -5,6 +5,11 @@ const maybeFormatMessage = require('../util/maybe-format-message');
 const BlockType = require('./block-type');
 const SecurityManager = require('./tw-security-manager');
 
+// How long a sandboxed extension gets to load and register itself. Matches the
+// overall deadline the unsandboxed runner already uses, so both sandbox modes
+// give up at the same point instead of one of them hanging forever.
+const EXTENSION_LOAD_TIMEOUT_MS = 30000;
+
 // These extensions are currently built into the VM repository but should not be loaded at startup.
 // TODO: move these out into a separate repository?
 // TODO: change extension spec so that library info, including extension ID, can be collected through static methods
@@ -249,8 +254,21 @@ class ExtensionManager {
 
         this.loadingAsyncExtensions++;
 
-        const sandboxMode = await this.securityManager.getSandboxMode(extensionURL);
-        const rewritten = await this.securityManager.rewriteExtensionURL(extensionURL);
+        // From here on, every failure path has to give the counter back. A
+        // leaked count never returns to 0, and installTargets() awaits
+        // allAsyncExtensionsLoaded() before doing anything else, so a single
+        // throw here would leave every later project load stuck on the loading
+        // screen — same symptom as the never-settling extension promise, but
+        // permanent for the session.
+        let sandboxMode;
+        let rewritten;
+        try {
+            sandboxMode = await this.securityManager.getSandboxMode(extensionURL);
+            rewritten = await this.securityManager.rewriteExtensionURL(extensionURL);
+        } catch (error) {
+            this._finishedLoadingExtensionScript();
+            throw error;
+        }
 
         if (sandboxMode === 'unsandboxed') {
             const {load} = require('./tw-unsandboxed-extension-runner');
@@ -286,18 +304,75 @@ class ExtensionManager {
 
         /* eslint-disable max-len */
         let ExtensionWorker;
-        if (sandboxMode === 'worker') {
-            ExtensionWorker = require('worker-loader?name=js/extension-worker/extension-worker.[hash].js!./extension-worker');
-        } else if (sandboxMode === 'iframe') {
-            ExtensionWorker = (await import(/* webpackChunkName: "iframe-extension-worker" */ './tw-iframe-extension-worker')).default;
-        } else {
-            throw new Error(`Invalid sandbox mode: ${sandboxMode}`);
+        try {
+            if (sandboxMode === 'worker') {
+                ExtensionWorker = require('worker-loader?name=js/extension-worker/extension-worker.[hash].js!./extension-worker');
+            } else if (sandboxMode === 'iframe') {
+                ExtensionWorker = (await import(/* webpackChunkName: "iframe-extension-worker" */ './tw-iframe-extension-worker')).default;
+            } else {
+                throw new Error(`Invalid sandbox mode: ${sandboxMode}`);
+            }
+        } catch (error) {
+            // Worker chunk missing (offline, stale deploy) or an unknown mode from
+            // the security manager: release the counter before surfacing the error.
+            this._finishedLoadingExtensionScript();
+            throw error;
         }
         /* eslint-enable max-len */
 
         return new Promise((resolve, reject) => {
-            this.pendingExtensions.push({extensionURL: rewritten, resolve, reject});
-            dispatch.addWorker(new ExtensionWorker());
+            // A sandboxed extension can stay pending forever: the script URL may
+            // never answer (offline host, dead CDN), it may throw before calling
+            // Scratch.extensions.register(), or the iframe may never come up.
+            // installTargets() awaits Promise.all() of these promises, so an
+            // unanswered load parks the project on the loading screen with no way
+            // out. Give up after a while and let the rest of the project install;
+            // the extension's blocks are simply missing, which is how a failed
+            // extension already behaves everywhere else.
+            let timer = null;
+            const pending = {
+                extensionURL: rewritten,
+                // Filled in by allocateWorker(). Lets the timeout tell whether a
+                // worker already took this entry.
+                workerId: null,
+                timedOut: false,
+                counterReleased: false,
+                resolve: () => {
+                    if (timer !== null) clearTimeout(timer);
+                    resolve();
+                },
+                reject: error => {
+                    if (timer !== null) clearTimeout(timer);
+                    reject(error);
+                }
+            };
+            this.pendingExtensions.push(pending);
+            timer = setTimeout(() => {
+                timer = null;
+                pending.timedOut = true;
+                // The counter is released here, so a registration that trickles in
+                // later (and all later registrations of this worker) must not
+                // release it again — see _releaseAsyncExtensionCounter.
+                pending.counterReleased = true;
+                log.warn(`Extension did not finish loading in ${EXTENSION_LOAD_TIMEOUT_MS}ms, skipping: ${rewritten}`);
+                // Leave the entry in the queue when a worker already took it, and
+                // only mark it: splicing it would let a worker that starts later
+                // consume the *next* extension's entry and load the wrong URL.
+                // allocateWorker() skips timed-out entries, so either way the
+                // stale URL is never loaded.
+                this._finishedLoadingExtensionScript();
+                resolve();
+            }, EXTENSION_LOAD_TIMEOUT_MS);
+            try {
+                dispatch.addWorker(new ExtensionWorker());
+            } catch (error) {
+                // No worker was created, so nothing will ever allocate this entry.
+                // Drop it now, otherwise the next extension's worker would shift
+                // this URL off the queue and load the wrong extension.
+                const index = this.pendingExtensions.indexOf(pending);
+                if (index !== -1) this.pendingExtensions.splice(index, 1);
+                reject(error);
+            }
         }).catch(error => this._failedLoadingExtensionScript(error));
     }
 
@@ -413,7 +488,23 @@ class ExtensionManager {
 
     allocateWorker () {
         const id = this.nextExtensionWorker++;
-        const workerInfo = this.pendingExtensions.shift();
+        // Skip entries whose load already gave up: a worker that starts after the
+        // timeout must not take the next extension's entry and load the wrong URL.
+        let workerInfo = null;
+        while (this.pendingExtensions.length > 0) {
+            const candidate = this.pendingExtensions.shift();
+            if (!candidate.timedOut) {
+                workerInfo = candidate;
+                break;
+            }
+        }
+        if (!workerInfo) {
+            // Nothing left to load. Told to the worker so it can stop quietly
+            // instead of trying to load "undefined".
+            log.warn(`Extension worker ${id} started with no pending extension to load`);
+            return [id, null];
+        }
+        workerInfo.workerId = id;
         this.pendingWorkers[id] = workerInfo;
         this.workerURLs[id] = workerInfo.extensionURL;
         return [id, workerInfo.extensionURL];
@@ -436,12 +527,41 @@ class ExtensionManager {
         dispatch.call(serviceName, 'getInfo').then(info => {
             this._loadedExtensions.set(info.id, serviceName);
             this._registerExtensionInfo(serviceName, info);
-            this._finishedLoadingExtensionScript();
+            this._releaseAsyncExtensionCounter(serviceName);
+        }).catch(error => {
+            // getInfo rejected, or the info was too broken to register. The load
+            // itself already resolved (onWorkerInit), so this only has to keep the
+            // counter honest: leaving it raised makes allAsyncExtensionsLoaded()
+            // wait forever and every later project load hang.
+            log.error(`Failed to register extension service ${serviceName}:`, error);
+            this._releaseAsyncExtensionCounter(serviceName);
         });
     }
 
+    /**
+     * Release the pending-async-extension count for a worker's service, once.
+     * The load timeout releases the count itself (the script may never register
+     * at all), so a registration that arrives afterwards must not release it a
+     * second time: the counter would reach 0 while other extensions are still
+     * loading and installTargets() would stop waiting too early.
+     * @param {string} serviceName - name of the service hosting the extension
+     * @private
+     */
+    _releaseAsyncExtensionCounter (serviceName) {
+        // Worker services are named "extension.WORKER_ID.EXTENSION_ID".
+        const workerId = +serviceName.split('.')[1];
+        const workerInfo = this.pendingWorkers[workerId];
+        if (workerInfo && workerInfo.counterReleased) return;
+        if (workerInfo) workerInfo.counterReleased = true;
+        this._finishedLoadingExtensionScript();
+    }
+
     _finishedLoadingExtensionScript () {
-        this.loadingAsyncExtensions--;
+        // The load timeout also decrements this counter, and a registration can
+        // still arrive after it fired. Never go below zero: allAsyncExtensionsLoaded
+        // resolves at exactly 0, so a negative counter would make every later
+        // project load wait forever.
+        if (this.loadingAsyncExtensions > 0) this.loadingAsyncExtensions--;
         if (this.loadingAsyncExtensions === 0) {
             this.asyncExtensionsLoadedCallbacks.forEach(i => i.resolve());
             this.asyncExtensionsLoadedCallbacks = [];
@@ -451,7 +571,7 @@ class ExtensionManager {
     _failedLoadingExtensionScript (error) {
         // Don't set the current extension counter to 0, otherwise it will go negative if another
         // extension finishes or fails to load.
-        this.loadingAsyncExtensions--;
+        if (this.loadingAsyncExtensions > 0) this.loadingAsyncExtensions--;
         this.asyncExtensionsLoadedCallbacks.forEach(i => i.reject(error));
         this.asyncExtensionsLoadedCallbacks = [];
         // Re-throw error so the promise still rejects.
@@ -466,6 +586,15 @@ class ExtensionManager {
     onWorkerInit (id, e) {
         const workerInfo = this.pendingWorkers[id];
         delete this.pendingWorkers[id];
+        if (!workerInfo) {
+            // Two cases: a worker that never got an extension (allocateWorker
+            // returned null), or a duplicate init report. Either way nobody is
+            // waiting on this id, and dereferencing undefined here used to throw
+            // out of the dispatch call, which left the worker's own promise
+            // chain broken.
+            log.warn(`Ignoring onWorkerInit for extension worker ${id}: no pending worker`);
+            return;
+        }
         if (e) {
             workerInfo.reject(e);
         } else {
