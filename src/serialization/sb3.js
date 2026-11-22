@@ -2153,7 +2153,12 @@ const deserialize = async function (json, runtime, zip, isSingleSprite) {
     })
         .then(assets => Promise.all(targetObjects
             .map((target, index) =>
-                parseScratchObject(target, runtime, extensions, zip, assets[index], isSingleSprite))))
+                // 极致懒加载（lazy asset install）：
+// gui 侧设置 runtime.lazyAssetInstall = true 时，项目打开只等当前造型就绪，
+// 其余造型/声音沿用 installWithCurrentCostume 路径后台装载，
+// 到达后经 requestTargetsUpdate 通知 GUI 刷新。
+                parseScratchObject(target, runtime, extensions, zip, assets[index],
+                    isSingleSprite || runtime.lazyAssetInstall === true))))
         .then(targets => targets // Re-sort targets back into original sprite-pane ordering
             .map((t, i) => {
                 // Add layer order property to deserialized targets.
